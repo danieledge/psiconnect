@@ -1,5 +1,7 @@
 # PsiConnect: the Atom modem, a Psion-tuned WiFi and USB modem
 
+[![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-support-FFDD00?logo=buymeacoffee&logoColor=000)](https://buymeacoffee.com/danedge)
+
 Firmware for an **M5Stack AtomS3R** or **AtomS3 Lite** (ESP32-S3), or a
 plain **Atom** (Lite or Matrix, ESP32), wired to a Psion Series 5/5mx through an RS-232
 transceiver. It turns the Atom into a Hayes-style modem for PsiTerm, PsiMail
