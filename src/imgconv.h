@@ -1,6 +1,6 @@
 // imgconv.h - pictures to 16 greys for the Psion, on the Atom. A JPEG, PNG
 // or GIF that the web proxy fetched is decoded with PsiMail's own decoders
-// (mail/engine/img: picojpeg, a progressive JPEG decoder, PNG through
+// (core/mail/engine/img, the psion-core submodule: picojpeg, a progressive JPEG decoder, PNG through
 // zlib's inflate, GIF), shrunk to fit a width, dithered to the 16 greys,
 // and written out as a 4-bit GIF a row at a time. Links on the Psion
 // decodes a small GIF in a fraction of the time a JPEG takes, and the file

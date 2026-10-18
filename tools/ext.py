@@ -68,6 +68,13 @@ def build_sources(e, variant_dir, src_dir, src_filter=None):
 
 proj = env.subst("$PROJECT_DIR")  # noqa: F821
 mcu = env.BoardConfig().get("build.mcu", "")  # noqa: F821
+
+# The image must carry no paths from the machine that built it: __FILE__
+# (asserts, log lines) in the core's libraries and our own would otherwise
+# put the home directory and the checkout's path in the .bin. Map them to
+# "~" and ".", for every file compiled with this environment.
+env.Append(CCFLAGS=["-ffile-prefix-map=%s=~" % os.path.expanduser("~"),  # noqa: F821
+                    "-ffile-prefix-map=%s=." % proj])
 for d in module_dirs(proj):
     with open(os.path.join(d, "module.json")) as f:
         m = json.load(f)

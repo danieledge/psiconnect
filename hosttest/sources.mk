@@ -3,7 +3,7 @@
 # and by an extension module's own test Makefile (src/ext.h), which adds its
 # sources to these. MIT licence (see LICENSE at the top of the repository).
 FW ?= ..
-FW_IMG = $(FW)/../../mail/engine/img
+FW_IMG ?= $(FW)/core/mail/engine/img
 FW_SRC = $(FW)/src/modem.cpp $(FW)/src/settings.cpp $(FW)/src/schema.cpp $(FW)/src/ext.cpp $(FW)/src/uplink.cpp $(FW)/src/proxy.cpp \
       $(FW)/src/wgconf.cpp $(FW)/src/netlist.cpp $(FW)/src/dnsrelay.cpp $(FW)/src/atremote.cpp \
       $(FW)/src/htmlsimp.cpp $(FW)/src/gzip.cpp $(FW)/src/imgconv.cpp $(FW)/src/ppp.cpp $(FW)/src/status.cpp $(FW)/src/canvas.cpp \

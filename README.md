@@ -12,6 +12,19 @@ From 2.2 the firmware calls itself **PsiConnect**: `ATI`, the web pages and
 the access point use that name. The rest of the repository still calls it
 the Atom modem. Version 2.2 is in use on an AtomS3R with a Psion 5mx.
 
+**The suite:** PsiConnect is the modem of the Psion suite, with
+[PsiTerm](https://github.com/danieledge/psiterm) (SSH),
+[PsiMail](https://github.com/danieledge/psimail) (email and calendar),
+[PsiWeb](https://github.com/danieledge/psiweb) (web browser),
+[PsiCast](https://github.com/danieledge/psicast) (screen sharing, as an
+extension module of this firmware),
+[PsiLinux](https://github.com/danieledge/psilinux),
+[PsiProxy](https://github.com/danieledge/psiproxy) and the shared
+[psion-core](https://github.com/danieledge/psion-core). The suite's home
+page is [danieledge.github.io/psion](https://danieledge.github.io/psion/).
+Until October 2026 this firmware lived in the PsiTerm repository as
+`firmware/atom-modem`; its history carries on here.
+
 Version 2.0 adds: the internet from an **iPhone through its Personal
 Hotspot** (the Atom joins it as a WiFi network; this is the supported path,
 with an Internet check, rejoining and diagnostics); **web pages** for every
@@ -173,7 +186,8 @@ own USB; the plain Atom shows up as a USB serial port (CH9102 or FTDI).
 
 ```sh
 pip install platformio
-cd firmware/atom-modem
+git clone --recurse-submodules https://github.com/danieledge/psiconnect.git
+cd psiconnect
 pio run -e atoms3r -t upload         # the AtomS3R (ESP32-S3, with the screen)
 pio run -e atoms3-lite -t upload     # the AtomS3 Lite (ESP32-S3)
 pio run -e m5stack-atom -t upload    # the plain Atom Lite / Matrix (ESP32)
@@ -185,8 +199,8 @@ pio device monitor                   # optional: the USB status console, 115200 
 2.0.17) for the plain Atom. The AtomS3R also uses M5Unified (for its screen),
 and the S3 boards use WireGuard, vendored and pinned in `lib/wireguard`
 (see its `library.json`). The Arduino IDE
-no longer builds 2.0 on its own (the picture converter compiles PsiMail's
-decoders from `../../mail/engine/img`).
+no longer builds 2.0 on its own (the picture converter compiles the suite's
+shared picture decoders from `core/mail/engine/img`).
 
 **An AtomS3 Lite in USB host mode** (`AT$USB=1`) cannot be programmed until
 the port is a device again: either `AT$USB=0`, `AT&W`, `ATZ`, or hold the
@@ -928,14 +942,22 @@ DCD on all the time.
 
 ## Building and testing
 
-- `pio run` builds the firmware. `arduino-cli compile --fqbn
-  esp32:esp32:m5stack-atom .` builds it the Arduino way, with no warnings
-  at `--warnings all`.
+- The shared picture decoders and zlib come from
+  [psion-core](https://github.com/danieledge/psion-core), the git submodule
+  `core/`: clone with `--recurse-submodules`, or run
+  `git submodule update --init` in a checkout made without it.
+- `pio run -e atoms3r` (or `atoms3-lite`, `m5stack-atom`) builds the
+  firmware. `arduino-cli compile --fqbn esp32:esp32:m5stack-atom .` used to
+  build it the Arduino way; since 2.0 the sketch needs the sources in
+  `core/`, which the IDE will not find from a sketch folder.
+- `make -C hosttest test` runs the host tests (below).
 - Extension modules (`src/ext.h`): optional parts kept outside this tree.
   A module is a directory with a `module.json` (its sources, include
-  directories, defines and libraries, for every board or per chip); a link to it in `ext/` (git-ignored), or its
-  path in `$AM_EXT_DIRS`, builds it in (`tools/ext.py`), and `AM_EXT=0 pio
-  run` leaves every module out. It can add settings (in `Settings2`'s
+  directories, defines and libraries, for every board or per chip); a link
+  to it in `ext/` (git-ignored), or its path in `$AM_EXT_DIRS`, builds it in
+  (`tools/ext.py`), and `AM_EXT=0 pio run` leaves every module out. PsiCast's
+  module is the `atom/` folder of a [psicast](https://github.com/danieledge/psicast)
+  checkout beside this one: `ln -s ../../psicast/atom ext/cast`. It can add settings (in `Settings2`'s
   `ext[]` bytes), answer calls to `ATDT192.168.7.1:<port>`, listen on the
   PPP link, add lines to `ATI` and `AT$STAT?`, and add web routes and status
   rows, a page on the LCD (in the button's main ring, and over Home while
@@ -1026,7 +1048,8 @@ DCD on all the time.
   `curl -x`, or PsiWeb's ARM harness at it.
 - `test_fwtrial`: a firmware update on trial and the way back (see
   `docs/UPGRADE.md`), against a model of the bootloader's otadata.
-- `python3 tools/emu/net.py proxy` (from the top of the repository) is the
+- `python3 core/tools/emu/net.py proxy` (from a PsiWeb checkout beside this
+  one, with this checkout's `hosttest/hostmodem`) is the
   end-to-end test in the Psion emulator. PsiWeb sets *Use a proxy* to
   `psiproxy`, 8080, and opens a real site (`EMU_PROXY_URL`, by default
   `news.ycombinator.com`) through the host modem. It needs the Internet.

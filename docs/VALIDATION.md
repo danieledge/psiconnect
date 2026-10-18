@@ -25,11 +25,11 @@ results); that is the baseline the first bench session confirms first.
 | Item | Level | Evidence / notes |
 |---|---|---|
 | `AT`, `ATE/V/Q`, `ATI`, `ATZ`, `AT&F/W/V/C`, `ATS2/S12`, `A/`, init strings accepted | Host-unit-tested | `test_modem` basics, settings |
-| `ATDT host:port` and its variants; `CONNECT <baud>`; `NO CARRIER` on failure, on close (after the last byte), on WiFi loss | Host-unit-tested | dial, carrier, psiglue sections; the psiglue section types exactly what `ssh/psiglue.cpp` sends |
+| `ATDT host:port` and its variants; `CONNECT <baud>`; `NO CARRIER` on failure, on close (after the last byte), on WiFi loss | Host-unit-tested | dial, carrier, psiglue sections; the psiglue section types exactly what psion-core's `ssh/psiglue.cpp` sends |
 | `+++` with guard times (every edge case), `ATO`, `ATH` | Host-unit-tested | escape section |
 | Pacing: rate, 16-byte bursts, back-pressure with a small ring, order kept; 57600/115200/230400 rates | Host-unit-tested (simulated UART and clock) | pacing section; the simulated line obeys the baud rate, not a real UART FIFO |
-| `AT$SB`/`ATB` with the 15 s fall-back trial; the PsiKernTest dialogue | Host-unit-tested; the dialogue also exercised in the emulator in 1.x (`tools/emu/net.py kern*`) | baud fallback section |
-| **230400 on the real line** | **Not tested (needs bench)** | The Psion side set `UBRCR` 1 on Dan's 5mx (experimental/kernel results); the Atom side accepts it; the pair has not run together with 2.0 |
+| `AT$SB`/`ATB` with the 15 s fall-back trial; the PsiKernTest dialogue | Host-unit-tested; the dialogue also exercised in the emulator in 1.x (the kernel experiment's `net.py kern*` tests) | baud fallback section |
+| **230400 on the real line** | **Not tested (needs bench)** | The Psion side set `UBRCR` 1 on Dan's 5mx (the kernel experiment's results); the Atom side accepts it; the pair has not run together with 2.0 |
 | **460800, 921600** | Not tested; 921600 is beyond the Psion's divider: Known limitation | |
 | **RTS/CTS hardware flow control** (`AT$FC=1`) | **Implemented** (the UART driver's `uart_set_hw_flow_ctrl(CTS_RTS)` and `uart_set_pin` for G7/G8 through the core's `setHwFlowCtrlMode`/`setPins`: verified in the source, HARDWARE.md §7), Compiles; the AUTO-pacing change Host-unit-tested; the handshake itself **Not tested on hardware**; **Known limitation with the RS232 Base** (no RTS/CTS wires: `AT$FC=1` then has no effect on the line) | the four-wire build, HARDWARE.md §7 (Path B: one MAX3232 on the bare header, G7→pin 8, pin 7→G8) |
 | **The RS-232 electrical path** (the Atomic RS232 Base's transceiver; nothing TTL leaves the stacked boards) | Verified by the part (the Base is the transceiver) | HARDWARE.md §1 |
@@ -113,7 +113,7 @@ checklist ticked. Record every result in `TEST-REPORT.md`.
    own timeout message; back out of airplane mode: `reachable`.
 
 **T2. 230400 (mandatory target; pacing only with the RS232 Base)**
-1. PsiKernTest (`experimental/kernel`) → Write → *Serial link with the
+1. PsiKernTest (the kernel experiment, a separate repository) → Write → *Serial link with the
    modem*. It does `AT$SB=230400`, sets the 5mx's divider, `ATI` ten times
    at each speed, back to 115200. Record "N of 10 clean" at both speeds.
 2. If clean: PsiTerm at 230400 (the apps' baud list ends at 115200: this
@@ -177,7 +177,7 @@ in `AT&V`; factory reset from the page.
   real); there is no DTR; the RS232 Base build has no RTS/CTS; `AT$EXEC`
   output is bounded by the helper (64 KB, 30 s), not by the modem.
 
-## 4. The shared-code change (`mail/engine/img`)
+## 4. The shared-code change (`mail/engine/img`, now `core/mail/engine/img` in psion-core)
 
 `PmImgOpts` gained a field, `exact` (int, at the end of the struct);
 `pmjpeg.c` and `pmjprog.c` read it when choosing the JPEG decode scale.
@@ -200,6 +200,7 @@ in `AT&V`; factory reset from the page.
   the stack; no stored format includes it; no ABI crosses a process
   boundary (the decoders are compiled into each program). On the Psion the
   decode scale is unchanged, so memory is unchanged.
-- **Flag:** this is the one change outside `firmware/atom-modem` (with the
-  one-line `tools/emu/net.py` version-string match). It should be reviewed
-  as a PsiMail change in the same commit.
+- **Flag:** this was the one change outside the firmware's own folder (with
+  the one-line `tools/emu/net.py` version-string match), made when the
+  firmware still lived in the PsiTerm repository. It was reviewed as a
+  PsiMail change in the same commit.
