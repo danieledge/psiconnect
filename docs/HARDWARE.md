@@ -310,7 +310,7 @@ common ground with the Atom (and with the Base, if Path A is used).
 VALIDATION.md T3: at 115200 with `AT$PR=0`, a 1 MB download with no
 errors proves the handshake; pulling the pin-7 wire mid-transfer must stop
 the modem's output within a byte or two, and restore it when reconnected;
-then 230400 (PsiKernTest sets the Psion's divider) with `AT$PR=0`.
+then 230400 (the kernel experiment sets the Psion's divider) with `AT$PR=0`.
 
 ## 8. Sources
 
