@@ -65,7 +65,7 @@ static void TestBasics()
 	CHECK(Has(r.Got(), "ERROR"));
 	r.TypeRun("ATI\r");
 	g = r.Got();
-	CHECK(g.find("\r\nPsiConnect 2.2 (Psion-tuned)") == 0);     // the first line: the name
+	CHECK(g.find("\r\nPsiConnect 2.3 (Psion-tuned)") == 0);     // the first line: the name
 	CHECK(Has(g, "IP 192.168.1.50"));
 	CHECK(Has(g, "pacing 5500 bytes/s"));
 	CHECK(g.size() >= 6 && g.substr(g.size() - 6) == "\r\nOK\r\n");
@@ -1056,7 +1056,9 @@ static void TestReachability()
 // PPP dial dispatch (the lwIP link itself is verified on hardware; here the
 // host stub only flips the mode, so we check a numeric dial routes to PPP,
 // data goes into PPP not a TCP server, escape keeps the link up, ATH ends it,
-// *99# triggers it too, and an uplink-down or PPP-off dial gives NO CARRIER)
+// *99# triggers it too, and a PPP-off dial gives NO CARRIER; with no uplink
+// the call comes up all the same, and it lives through the uplink going and
+// coming back)
 static void TestPpp()
 	{
 	Rig r;
@@ -1089,11 +1091,35 @@ static void TestPpp()
 	r.TypeRun("+++", 900); r.Got();
 	r.TypeRun("ATH\r"); r.Got();
 	CHECK(!r.modem->PppCall());     // torn down before the next dial
-	// uplink down: NO CARRIER even with PPP on
+	// the HAL has been told about the uplink (once, at the start)
+	CHECK(r.hal.pppUplink == 1 && r.hal.pppUplinkCalls == 1);
+	// no uplink: the call comes up all the same, for the modem's own services
 	r.hal.wifi = false;
 	r.Run(300);
+	CHECK(r.hal.pppUplink == 0 && r.hal.pppUplinkCalls == 2);
+	CHECK(!r.hal.Logged("ppp: the uplink is back"));
 	r.TypeRun("ATD777\r");
-	CHECK(Has(r.Got(), "NO CARRIER") && !r.modem->PppCall());
+	CHECK(Has(r.Got(), "CONNECT") && r.modem->PppCall() && r.modem->Online() && r.hal.dcd);
+	CHECK(r.hal.Logged("ppp: no uplink - only the modem's own services until it comes back"));
+	r.TypeRun("pppdata", 1000);
+	CHECK(r.modem->PppCall() && r.hal.toServer.empty());
+	// the uplink comes up during the call: no redial, the call goes on
+	r.hal.wifi = true;
+	r.Run(300);
+	CHECK(r.hal.pppUplink == 1 && r.modem->PppCall() && r.modem->Online());
+	CHECK(r.hal.Logged("ppp: the uplink is back - the Psion reaches the outside world again"));
+	// and goes again: the call is not dropped
+	r.hal.wifi = false;
+	r.Run(2000);
+	std::string g = r.Got();
+	CHECK(!Has(g, "NO CARRIER") && r.modem->PppCall() && r.modem->Online() && r.hal.dcd && r.hal.pppUplink == 0);
+	r.Run(1000);
+	r.TypeRun("+++", 900); r.Got();
+	r.TypeRun("ATH\r");
+	CHECK(Has(r.Got(), "OK") && !r.modem->PppCall());
+	// a TCP dial with no uplink still gives NO CARRIER
+	r.TypeRun("ATDT example.org:23\r");
+	CHECK(Has(r.Got(), "NO CARRIER") && !r.modem->Connected());
 	}
 
 // ----- the button: debounce, click, hold, boot-hold -----------------------------
@@ -1329,7 +1355,7 @@ static void TestStatusModel()
 		&& OnBlocks(p, "192.168.1.50"));
 	// the system page: version, board, uplink, memory
 	FillLay(r, am::EPageSystem, p);
-	CHECK(OnBlocks(p, "Version 2.2") && OnBlocks(p, "FakeBoard") && OnBlocks(p, "Uplink Wi-Fi"));
+	CHECK(OnBlocks(p, "Version 2.3") && OnBlocks(p, "FakeBoard") && OnBlocks(p, "Uplink Wi-Fi"));
 	// the log page: the newest line at the bottom, wrapped to the width
 	r.hal.Log("a log line that is longer than the screen is wide, for sure");
 	r.hal.Log("last line");
@@ -1454,6 +1480,24 @@ static void TestPager()
 	g.Click(t);
 	CHECK(!g.Idle(t + 2000, false) && g.Page() == am::EPageNetwork);
 	CHECK(g.Idle(t + am::Pager::kHomeAfterMs + 5, false));
+	// a module's page (ext.h: HasPage) is the next after Home, then Wi-Fi and
+	// VPN as before; a double-press there is Home, and so is the wait
+	am::Pager e;
+	e.SetExtPage(true);
+	t = 5000;
+	e.Click(t); CHECK(e.Page() == am::EPageExt && !e.InDetails() && !e.Quiet(t));
+	e.Click(t); CHECK(e.Page() == am::EPageNetwork);
+	e.Click(t); CHECK(e.Page() == am::EPageVpn);
+	e.Click(t); CHECK(e.Page() == am::EPageHome);
+	e.Click(t);
+	CHECK(e.Double(t) == am::Pager::ENothing && e.Page() == am::EPageHome);
+	e.Click(t);
+	CHECK(!e.Idle(t + am::Pager::kHomeAfterMs - 1, false) && e.Idle(t + am::Pager::kHomeAfterMs, false) && e.Page() == am::EPageHome);
+	// the module gone (or none): never its page, and back to Home from it
+	e.Click(t);
+	e.SetExtPage(false);
+	CHECK(e.Page() == am::EPageHome);
+	e.Click(t); CHECK(e.Page() == am::EPageNetwork);
 	}
 
 // ----- PPP output: whole frames, in order, paced, held when offline -----------
@@ -1681,7 +1725,7 @@ static void TestWifiFromPsion()
 	r.Run(50);
 	r.TypeRun("AT$STAT?\r", 100);
 	g = r.Got();
-	CHECK(Has(g, "\r\n+STAT:VER=2.2\r\n") && Has(g, "+STAT:BOARD=FakeBoard") && Has(g, "+STAT:SSID=\"Home\"")
+	CHECK(Has(g, "\r\n+STAT:VER=2.3\r\n") && Has(g, "+STAT:BOARD=FakeBoard") && Has(g, "+STAT:SSID=\"Home\"")
 		&& Has(g, "+STAT:WIFI=INTERNET") && Has(g, "+STAT:CUR=\"Home\"") && Has(g, "+STAT:IP=192.168.1.50")
 		&& Has(g, "+STAT:RSSI=-60") && Has(g, "+STAT:NET=1") && Has(g, "+STAT:FAIL=NONE") && Has(g, "+STAT:UP=WIFI")
 		&& Has(g, "+STAT:CALL=0") && Has(g, "+STAT:BAUD=115200") && Has(g, "+STAT:FC=0") && Has(g, "+STAT:CHK=\""));

@@ -310,7 +310,7 @@ common ground with the Atom (and with the Base, if Path A is used).
 VALIDATION.md T3: at 115200 with `AT$PR=0`, a 1 MB download with no
 errors proves the handshake; pulling the pin-7 wire mid-transfer must stop
 the modem's output within a byte or two, and restore it when reconnected;
-then 230400 (PsiKernTest sets the Psion's divider) with `AT$PR=0`.
+then 230400 (the kernel experiment sets the Psion's divider) with `AT$PR=0`.
 
 ## 8. Sources
 
@@ -321,7 +321,7 @@ then 230400 (PsiKernTest sets the Psion's divider) with `AT$PR=0`.
 2. WiRSa (github.com/nullvalue0/WiRSa): female DE-9 in the modem/DCE
    convention, TX pin 2, RX pin 3, GND pin 5; the full RS-232 set on its
    board.
-3. This repository, `firmware/atom-modem/README.md`, the 1.x wiring table:
+3. This repository's `README.md`, the 1.x wiring table:
    Base G → pin 5, T → pin 2, R → pin 3.
 4. M5Stack, Atomic RS232 Base and AtomS3 documentation: the Base's
    transceiver on G5/G6 of the AtomS3 family; the Base's T/R/G terminals

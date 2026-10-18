@@ -5,6 +5,9 @@
 #include <WiFi.h>
 #include <esp_system.h>
 #include <Update.h>
+#include <esp_core_dump.h>
+#include <esp_flash.h>
+#include "fwsafe.h"
 #if defined(AM_HAS_LCD)
 #include "screen.h"
 #include "../canvas.h"
@@ -42,7 +45,15 @@ void WebUi::Begin(Modem& aModem, AtomHal& aHal)
 	iServer.on("/wifi", HTTP_GET, [this]() { PageWifi(); });
 	iServer.on("/settings", HTTP_GET, [this]() { PageSettings(); });
 	iServer.on("/log", HTTP_GET, [this]() { PageLog(); });
+	iServer.on("/crash", HTTP_GET, [this]() { PageCrash(); });
 	iServer.on("/screen.bmp", HTTP_GET, [this]() { ScreenBmp(); });
+	// the extension modules' routes (ext.h)
+	for (int i = 0; i < iModem->ExtensionCount(); i++)
+		{
+		Extension* x = iModem->ExtensionAt(i);
+		for (const ExtRoute* r = x->Routes(); r && r->path; r++)
+			iServer.on(r->path, HTTP_GET, [this, x, r]() { ExtGet(*x, *r); });
+		}
 	iServer.on("/system", HTTP_GET, [this]() { PageSystem(); });
 	iServer.on("/vpn", HTTP_GET, [this]() { PageVpn(); });
 	iServer.on("/wg", HTTP_POST, [this]() { PostWg(); });
@@ -197,7 +208,10 @@ bool WebUi::FromAp()
 bool WebUi::Allowed()
 	{
 	if (FromAp())
+		{
+		gFwSafe.WebServed();                  // (a new firmware on trial: the pages work)
 		return true;
+		}
 	if (!iS2.webPass[0])
 		{
 		iServer.send(403, "text/plain", "No web password is set: set one with AT$WEBPASS, or use the access point");
@@ -208,6 +222,7 @@ bool WebUi::Allowed()
 		iServer.requestAuthentication(BASIC_AUTH, "PsiConnect");
 		return false;
 		}
+	gFwSafe.WebServed();
 	return true;
 	}
 
@@ -215,11 +230,95 @@ bool WebUi::Allowed()
 // while the body streams in, so it cannot write a response here.
 bool WebUi::OtaAuth()
 	{
-	if (FromAp())
-		return true;
-	if (!iS2.webPass[0])
-		return false;
-	return iServer.authenticate("atom", iS2.webPass);
+	bool ok = FromAp() || (iS2.webPass[0] && iServer.authenticate("atom", iS2.webPass));
+	if (ok)
+		gFwSafe.WebServed();
+	return ok;
+	}
+
+// an extension module's route: behind the password unless it is open
+namespace {
+class WebQuery : public ExtQuery
+	{
+public:
+	explicit WebQuery(WebServer& aServer) : iServer(aServer) {}
+	const char* Arg(const char* aName) const override { iLast = iServer.arg(aName); return iLast.c_str(); }   // (until the next call)
+private:
+	WebServer& iServer;
+	mutable String iLast;
+	};
+}
+
+void WebUi::ExtGet(Extension& aExt, const ExtRoute& aRoute)
+	{
+	if (!aRoute.open && !Allowed())
+		return;
+	WebQuery q(iServer);
+	ExtReply r;
+	aExt.Get(aRoute.path, q, r);
+	if (r.gzip)
+		iServer.sendHeader("Content-Encoding", "gzip");
+	if (r.cache)
+		iServer.sendHeader("Cache-Control", r.cache);
+	iServer.send_P(r.status, r.type, (const char*)r.body, r.len);
+	}
+
+// ----- the crash report ---------------------------------------------------------------------------
+
+// The last crash's core dump, which the IDF writes to the coredump partition
+// on a panic. Plain text: the task, the exception, the backtrace (decode the
+// addresses with addr2line and the build's firmware.elf). ?raw=1 sends the
+// whole dump (for esp-coredump), ?clear=1 erases it.
+void WebUi::PageCrash()
+	{
+	if (!Allowed())
+		return;
+	size_t addr = 0, size = 0;
+	if (esp_core_dump_image_get(&addr, &size) != ESP_OK || !size)
+		{
+		iServer.send(200, "text/plain", "No crash report saved\n");
+		return;
+		}
+	if (iServer.hasArg("clear"))
+		{
+		esp_core_dump_image_erase();
+		iServer.send(200, "text/plain", "Crash report erased\n");
+		return;
+		}
+	if (iServer.hasArg("raw"))
+		{
+		iServer.setContentLength(size);
+		iServer.sendHeader("Content-Disposition", "attachment; filename=coredump.elf");
+		iServer.send(200, "application/octet-stream", "");
+		static uint8_t buf[1024];
+		for (size_t off = 0; off < size; off += sizeof(buf))
+			{
+			size_t n = size - off < sizeof(buf) ? size - off : sizeof(buf);
+			if (esp_flash_read(NULL, buf, addr + off, n) != ESP_OK)
+				break;
+			iServer.client().write(buf, n);
+			}
+		return;
+		}
+	static esp_core_dump_summary_t s;
+	if (esp_core_dump_get_summary(&s) != ESP_OK)
+		{
+		iServer.send(200, "text/plain", "A crash report is saved but cannot be read (?raw=1 to download it)\n");
+		return;
+		}
+	String o;
+	char line[96];
+	snprintf(line, sizeof(line), "Task: %.16s\nPC: 0x%08lx\nCause: %lu  address: 0x%08lx\nELF: %.16s\nBacktrace%s:",
+		s.exc_task, (unsigned long)s.exc_pc, (unsigned long)s.ex_info.exc_cause, (unsigned long)s.ex_info.exc_vaddr,
+		(const char*)s.app_elf_sha256, s.exc_bt_info.corrupted ? " (corrupted)" : "");
+	o += line;
+	for (uint32_t i = 0; i < s.exc_bt_info.depth && i < 16; i++)
+		{
+		snprintf(line, sizeof(line), " 0x%08lx", (unsigned long)s.exc_bt_info.bt[i]);
+		o += line;
+		}
+	o += "\n";
+	iServer.send(200, "text/plain", o);
 	}
 
 // ----- pieces of pages ---------------------------------------------------------------------------
@@ -253,7 +352,7 @@ void WebUi::Head(const char* aTitle)
 	Send("</title>");
 	SendP(FPSTR(kCss));
 	Send("</head><body><header><h1>PsiConnect</h1><a href=\"/\">Status</a><a href=\"/wifi\">WiFi</a><a href=\"/vpn\">VPN</a>"
-		"<a href=\"/settings\">Settings</a><a href=\"/log\">Log</a><a href=\"/system\">System</a></header><main>");
+		"<a href=\"/settings\">Settings</a><a href=\"/log\">Log</a><a href=\"/system\">System</a><a href=\"/screen\">Screen</a></header><main>");
 	}
 
 void WebUi::Tail()
@@ -361,7 +460,7 @@ void WebUi::PageStatus()
 	if (iModem->Connected())
 		{
 		snprintf(w, sizeof(w), "%s, %lu bytes to the Psion, %lu to the server", iModem->ProxyCall() ? "the web proxy"
-			: iModem->ExecCall() ? "psiexec" : "a connection", (unsigned long)iModem->ToPsion(), (unsigned long)iModem->ToServer());
+			: iModem->ExecCall() ? "psiexec" : iModem->ExtCall() ? iModem->ExtCall()->Name() : "a connection", (unsigned long)iModem->ToPsion(), (unsigned long)iModem->ToServer());
 		Send(w);
 		}
 	else
@@ -382,6 +481,23 @@ void WebUi::PageStatus()
 		Send(kModes[i]); Send("</button>");
 		}
 	Send("</form></td></tr>");
+	for (int i = 0; i < iModem->ExtensionCount(); i++)
+		{
+		const Extension* x = iModem->ExtensionAt(i);
+		char c[100];
+		x->StateText(c, sizeof(c));
+		const char* home = x->WebHome();
+		Send("<tr><td>");
+		if (home) { Send("<a href=\""); Send(home); Send("\">"); }
+		SendEsc(x->Name());
+		if (home) Send("</a>");
+		Send("</td><td>"); SendEsc(c);
+		if (home && x->WebAction())
+			{
+			Send(" &middot; <a href=\""); Send(home); Send("\">"); SendEsc(x->WebAction()); Send("</a>");
+			}
+		Send("</td></tr>");
+		}
 	int dns = iHal->DnsOk();
 	Send("<tr><td>Internet check</td><td>");
 	Send(iHal->Internet() == 1 ? "passed" : iHal->Internet() == 0 ? "failed" : "not run yet");
@@ -484,35 +600,48 @@ void WebUi::PageSettings()
 	Send("<div class=\"warn\"><b>Serial safety:</b> the Psion's port is RS-232 (up to ±12 V). Every serial pin below must reach it "
 		"through an RS-232 transceiver (a MAX3232, or the Atomic RS232 Base). Never wire a pin straight to the Psion.</div>");
 	// every group with a setting on this page (SchemaWebPage), in the table's order
-	static const TSchemaGroup kGroups[] = { SGUplink, SGSerial, SGProxy, SGTls, SGMail, SGPictures, SGExec, SGSystem, SGWifi, SGWg };
+	static const TSchemaGroup kGroups[] = { SGUplink, SGSerial, SGProxy, SGTls, SGMail, SGPictures, SGExec, SGExt, SGSystem, SGWifi, SGWg };
+	// (SGExt: a group for each extension module, under its name)
+	const Extension* mod = 0;
 	for (size_t g = 0; g < sizeof(kGroups) / sizeof(kGroups[0]); g++)
 		{
+		const TSchemaGroup grp = kGroups[g];
+		if (grp == SGExt)
+			{
+			mod = mod ? mod->iNextModule : ExtModules();
+			if (!mod)
+				continue;
+			if (mod->iNextModule)
+				g--;                                // (this group again after, for the next module)
+			}
 		bool any = false;
 		for (int i = 0; i < SchemaCount(); i++)
-			if (SchemaAt(i).group == kGroups[g] && strcmp(SchemaWebPage(SchemaAt(i)), "/settings") == 0)
+			if (SchemaAt(i).group == grp && strcmp(SchemaWebPage(SchemaAt(i)), "/settings") == 0
+				&& (grp != SGExt || ExtSchemaOwner(SchemaAt(i)) == mod))
 				any = true;
 		if (!any)
 			continue;
-		Send("<h2>"); Send(SchemaGroupName(kGroups[g])); Send("</h2>");
+		Send("<h2>"); Send(grp == SGExt ? mod->Name() : SchemaGroupName(grp)); Send("</h2>");
 		Send("<form method=\"post\" action=\"/set\"><input type=\"hidden\" name=\"back\" value=\"/settings\"><table>");
 		for (int i = 0; i < SchemaCount(); i++)
 			{
 			const SchemaEntry& e = SchemaAt(i);
-			if (e.group != kGroups[g] || strcmp(SchemaWebPage(e), "/settings") != 0)
+			if (e.group != grp || strcmp(SchemaWebPage(e), "/settings") != 0
+				|| (grp == SGExt && ExtSchemaOwner(e) != mod))
 				continue;
 			Field(e);
 			}
 		Send("</table><button class=\"go\">Apply</button></form>");
-		if (kGroups[g] == SGTls)
+		if (grp == SGTls)
 			Send("<p><small>With TLS termination the modem sees your mail and pages in plain text, and so does the serial cable. "
 				"For your own modem on your own network only. Set the account's TLS to <i>none</i> in PsiMail, keeping port 993 or 465.</small></p>");
-		if (kGroups[g] == SGMail)
+		if (grp == SGMail)
 			Send("<p><small>Only for the PPP route. Set a host and the modem accepts plaintext mail on 192.168.7.1 (993/465/995) and does the TLS to it, "
 				"checking the certificate (AT$TLSV). In PsiMail point IMAP/SMTP at <code>192.168.7.1</code> with security <i>None</i>. Empty = off.</small></p>");
-		if (kGroups[g] == SGExec)
+		if (grp == SGExec)
 			Send("<p><small>Runs commands on a PC through <code>tools/psiexecd.py</code>, which allows only the commands it is started with. "
 				"The token is kept in the modem's flash only.</small></p>");
-		if (kGroups[g] == SGUplink)
+		if (grp == SGUplink)
 			Send("<p><small>USB host mode takes the USB-C port: the console and programming need it back (hold the button through a reset "
 				"for the download mode). An iPhone enumerates but reports no carrier until Apple's pairing is implemented; use its WiFi hotspot.</small></p>");
 		}
@@ -569,13 +698,30 @@ void WebUi::PageSystem()
 	Send("<h2>Save</h2><form method=\"post\" action=\"/set\"><input type=\"hidden\" name=\"back\" value=\"/system\">"
 		"<input type=\"hidden\" name=\"save\" value=\"1\"><button class=\"go\">Save settings to flash</button></form>");
 	Send("<h2>Restart</h2><form method=\"post\" action=\"/set\"><input type=\"hidden\" name=\"restart\" value=\"1\"><button>Restart the modem</button></form>");
+	{
+	char t[160];
+	gFwSafe.Text(t, sizeof(t));
+	if (t[0])
+		{
+		Send(gFwSafe.Show() == EFwShowPrevious ? "<div class=\"warn\"><b>" : "<div class=\"ok\"><b>");
+		SendEsc(t);
+		Send(".</b></div>");
+		}
+	}
 	Send("<h2>Firmware update</h2><p>Upload a new <code>firmware.bin</code>: the modem writes it to the spare slot and "
-		"restarts on it. A web password must be set (<code>AT$WEBPASS</code>). If a bad build will not boot, recover over USB.</p>"
+		"restarts on it. A web password must be set (<code>AT$WEBPASS</code>). The new firmware is on trial until it has "
+		"the network (or a page is opened) after a restart; if it fails to start properly three times, the modem goes back "
+		"to the firmware it runs now, by itself.</p>"
 		"<form method=\"post\" action=\"/ota\" enctype=\"multipart/form-data\"><input type=\"file\" name=\"firmware\" accept=\".bin\">"
 		"<button class=\"go\" onclick=\"return confirm('Flash this firmware?')\">Upload &amp; flash</button></form>"
 		"<p><small>Or from a computer: <code>curl -u atom:PASSWORD -F firmware=@firmware.bin http://IP/ota</code></small></p>");
 	Send("<h2>Factory reset</h2><p>Every setting, the WiFi network and passwords included, back to the factory ones. The modem restarts.</p>"
 		"<form method=\"post\" action=\"/set\"><input type=\"hidden\" name=\"reset\" value=\"YES\"><button onclick=\"return confirm('Factory reset?')\">Factory reset</button></form>");
+	{
+	char t[96];
+	gFwSafe.Slots(t, sizeof(t));
+	Send("<p><small>Firmware: "); SendEsc(t); Send(".</small></p>");
+	}
 	Send("<h2>About</h2><p>PsiConnect "); Send(kVersion); Send(" on the "); Send(kBoardName);
 	Send(". <a href=\"/api/settings\">Settings as JSON</a>. The firmware and its documentation are in the PsiTerm repository "
 		"(<code>firmware/atom-modem/docs/UPGRADE.md</code>).</p>");

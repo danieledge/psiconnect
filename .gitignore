@@ -1,3 +1,6 @@
+# extension modules linked in for a build (src/ext.h, tools/ext.py)
+/ext/
+# the psion-core submodule's own files are its own
 .pio/
 hosttest/test_modem
 hosttest/test_v22
@@ -13,6 +16,9 @@ hosttest/screens/
 src/webpass_local.h
 hosttest/test_atremote
 hosttest/test_imapxcode
+hosttest/test_fwtrial
+hosttest/test_cast
+hosttest/libpccodec.so
 hosttest/run.out
 *_local.h
 # WireGuard client configs and keys: never commit them (paste them on the
@@ -24,3 +30,6 @@ wg*.conf
 wg-*.txt
 *_local.*
 *.key
+# Claude Code's local notes
+.claude/
+CLAUDE.local.md

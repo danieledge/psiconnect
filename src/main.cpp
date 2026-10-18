@@ -21,6 +21,8 @@
 #include "board/pppat.h"
 #include "board/ppptls.h"
 #include "board/wgtunnel.h"
+#include "board/fwsafe.h"
+#include "ext.h"
 #if defined(AM_HAS_LCD)
 #include "board/screen.h"
 #endif
@@ -220,6 +222,9 @@ void setup()
 #if ARDUINO_USB_CDC_ON_BOOT
 	Serial.setTxTimeoutMs(0);                 // (never wait for a PC that is not there: host mode)
 #endif
+	// a firmware just written over the web is on trial: counted, and given up
+	// on (the previous one booted) after three starts that never got healthy
+	am::gFwSafe.Begin(gHal);
 #if defined(AM_HAS_LCD)
 	am::gScreen.Begin();                      // (M5Unified first: the reset countdown is shown on it)
 #endif
@@ -244,6 +249,10 @@ void setup()
 	gHal.SetWeb(&gWeb);
 	gHal.SetUsb(&gUsb);
 	gModem = new am::Modem(gHal, ring, size);
+	// the extension modules built in (ext.h; none in a plain build)
+	for (am::Extension* x = am::ExtModules(); x; x = x->iNextModule)
+		if (x->Begin(gHal))
+			gModem->AddExtension(*x);
 	gWeb.Begin(*gModem, gHal);
 	gModem->Begin();                          // (loads the settings; starts WiFi, the pages, the USB host)
 	gModem->SeedNetwork(AM_DEFAULT_SSID, AM_DEFAULT_PASS);   // (first start only; empty in a plain build)
@@ -265,7 +274,16 @@ void loop()
 	gPppAt.Loop(*gModem, gHal);               // (AT commands for PsiConnect over PPP, 192.168.7.1:2323: only while a PPP call is up)
 	gPppTls.Loop(*gModem, gHal);              // (the stunnel-style TLS mail relay over PPP: only while a PPP call is up and a mail host is set)
 	am::gWg.Loop(millis());                   // (the WireGuard tunnel: the clock, the endpoint, the handshake)
+	// the extension modules: their share of the pass (non-blocking), with the
+	// PPP link's address while a PPP call is up (their calls on the modem
+	// route are in Modem::Loop)
+	for (int i = 0; i < gModem->ExtensionCount(); i++)
+		gModem->ExtensionAt(i)->Loop(gModem->PppCall() && gModem->Ppp().Up() ? am::kPppLocalIp : "", "");
 	ButtonTick();
+	gHal.LedTick(*gModem, gWeb.OtaBusy(), millis());   // (a module's light on the LED, ext.h; never over an update)
+	// (the firmware trial: healthy once the uplink is up, or a page has been
+	// served, or - with no network set - the access point is up)
+	am::gFwSafe.Tick(gModem->Link().Up(), gWeb.ApUp() && !gModem->Config().ssid[0] && gModem->Nets().count == 0);
 #if defined(AM_HAS_LCD)
 	am::gScreen.Tick(*gModem, gHal, millis());   // (after the pages, never inside Modem::Loop())
 #endif

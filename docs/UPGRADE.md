@@ -106,9 +106,9 @@ tutorial for the AtomS3 family puts the transceiver on **G5 (RX) and G6
 | Android USB tethering, CDC Ethernet dongles | **Works in principle (untested here)** | Android offers NCM (recent versions) or RNDIS (older ones) when USB tethering is turned on, with no pairing. NCM and ECM are implemented; RNDIS is not (section 12). |
 | Powering the phone from the Atom | **Barely; and it needs an external supply** | The AtomS3 Lite has no VBUS switch or source: the USB-C's 5 V is an *input* that feeds the board. In host mode, 5 V has to be fed into the header's **5V** pin from a separate supply, and it reaches the USB-C VBUS pin only if the board joins those two nets directly (the Atom Lite does; the AtomS3 Lite is believed to, but **measure it** before relying on it). The phone takes up to 1 A when VBUS is present and the ESP32 takes 300 mA in bursts: use a 2 A supply. A phone on a USB-C to USB-C cable (iPhone 15 and later) also needs the host to pull its CC line up (an Rp of 56 kΩ to 5 V); the AtomS3 Lite, built as a USB device, has the pull-downs instead, so such a phone will not even enumerate without an adapter that adds Rp. A Lightning phone on a USB-C to Lightning cable needs nothing of the kind. In every case the phone charges slowly at best. |
 | RTS/CTS hardware flow control | **Works, with a transceiver that carries four signals** | The ESP32's UART does RTS/CTS in hardware. The Atomic RS232 Base has only TXD and RXD, so it is pacing only; a MAX3232 on the Proto Kit has the two extra channels for RTS and CTS. |
-| Serial at 230400, 460800, 921600 | **Works at the Atom's end; the Psion's end is the limit** | `AT$SB` has done these since 1.1, with a 15 s fall-back if nothing answers at the new speed. The 5mx's UART divider is a plain divisor of 7.3728 MHz, and `PsiKernTest` has set it to 230400 (`UBRCR` 1) on Dan's machine. 460800 (`UBRCR` 0) is untested on the level shifter inside the Psion. 921600 is beyond the divider: it is listed because the Atom accepts it, not because the Psion can reach it. |
+| Serial at 230400, 460800, 921600 | **Works at the Atom's end; the Psion's end is the limit** | `AT$SB` has done these since 1.1, with a 15 s fall-back if nothing answers at the new speed. The 5mx's UART divider is a plain divisor of 7.3728 MHz, and the kernel experiment has set it to 230400 (`UBRCR` 1) on Dan's machine. 460800 (`UBRCR` 0) is untested on the level shifter inside the Psion. 921600 is beyond the divider: it is listed because the Atom accepts it, not because the Psion can reach it. |
 | TLS termination (plain IMAP/SMTP/HTTP from the Psion, TLS from the Atom) | **Works** | `WiFiClientSecure` with the Mozilla roots, as the web proxy already does. Hardware AES on the S3. |
-| Pictures scaled and dithered to 16 greys on the Atom | **Works, within fixed limits** | PsiMail's own decoders (`mail/engine/img`) run on the Atom: JPEGs decoded at 1/8 from the DC terms when big, PNG and GIF a row at a time. Interlaced files and very large pictures are passed through unchanged rather than buffered, because there is no PSRAM. |
+| Pictures scaled and dithered to 16 greys on the Atom | **Works, within fixed limits** | PsiMail's own decoders (`core/mail/engine/img`) run on the Atom: JPEGs decoded at 1/8 from the DC terms when big, PNG and GIF a row at a time. Interlaced files and very large pictures are passed through unchanged rather than buffered, because there is no PSRAM. |
 | Page simplification / readability | **Streaming heuristics only** | A proper readability pass needs the whole page in memory; the BBC front page is 950 KB. The simplifier is a state machine with 5 KB of buffers, so "reader" mode is a set of rules applied as the page streams (section 9). |
 | `AT$EXEC` remote compute | **Works, with a helper on the LAN** | The Atom relays text to a small program on a PC that runs allowed commands. Off unless turned on. |
 | Memory | **The real constraint** | WiFi takes about 60 KB, the USB host stack 25 KB plus transfer buffers, a TLS connection 50 KB while open, the modem with the proxy 25 KB, the gzip writer 16 KB, the picture decoder up to 40 KB, and the ring towards the Psion the rest (32 to 128 KB). The features are used one at a time (the modem handles one call at a time), the USB host is only started when the USB uplink is chosen or `AUTO` finds a device, and the ring is sized last, as before. `ATI` shows what is free. |
@@ -217,7 +217,7 @@ one HAL class per platform does the I/O.
    proxy.cpp/.h      the web proxy for PsiWeb (TLS, redirects, gzip, pictures, reader mode)
    htmlsimp.cpp/.h   the streaming HTML simplifier (modes 1, 2 and the new 4 "reader")
    gzip.cpp/.h       the streaming gzip writer
-   imgconv.cpp/.h    pictures to 16-grey GIF, on top of mail/engine/img (pmimg)
+   imgconv.cpp/.h    pictures to 16-grey GIF, on top of core/mail/engine/img (pmimg)
    exec.cpp/.h       psiexec: the text channel to a helper on the LAN, and AT$EXEC
    usbnet/           ESP32-S3 only: the USB host task and the network class drivers
      usbhost.cpp       enumeration, interface claim, transfers
@@ -518,7 +518,7 @@ a handshake and all the ChaCha20 on a 36 MHz ARM.
 
 Through the web proxy only (it needs to see the HTTP response). A picture
 of `image/jpeg`, `image/png` or `image/gif` up to `$PM` KB (64) is gathered
-whole, decoded with PsiMail's decoders (`mail/engine/img`: picojpeg for
+whole, decoded with PsiMail's decoders (`core/mail/engine/img`: picojpeg for
 baseline JPEG, the progressive decoder within its memory limit, PNG through
 zlib's inflate, GIF's first frame), shrunk to at most `$PW` pixels wide
 (300) by a whole number, dithered to the 16 greys, and sent as a **4-bit
@@ -614,7 +614,8 @@ converted. The start-up line and `ATI` show the PSRAM figures.
 
 ```sh
 pip install platformio
-cd firmware/atom-modem
+git clone --recurse-submodules https://github.com/danieledge/psiconnect.git
+cd psiconnect
 pio run -e atoms3-lite              # build
 pio run -e atoms3-lite -t upload    # flash over USB-C (device mode)
 pio device monitor                  # the USB console, 115200 (device mode only)
@@ -626,6 +627,49 @@ boards use WireGuard, vendored and pinned in `lib/wireguard` (its
 `default_8MB.csv` partition table: two app slots of about 3 MB each, so a
 firmware update over the web (`/ota`, see `WIRING.md`) is written beside the
 running one.
+
+### A failed update goes back to the previous firmware
+
+An update written over the web is *on trial* until it has started properly,
+and the modem goes back to the previous firmware by itself if it does not
+(`src/fwtrial.h` explains the rules; `board/fwsafe.cpp` is the ESP-IDF side).
+Two layers:
+
+- **The bootloader.** Arduino-ESP32's prebuilt bootloader (3.1.3 for the S3
+  boards, 2.0.17 for the plain Atom) is built with
+  `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`. A slot just written boots once as
+  *pending verify*; if the chip restarts before the firmware has confirmed
+  itself, the bootloader marks the slot *aborted* and boots the other one.
+  The core's start-up (`initArduino`) used to confirm every firmware at once;
+  the firmware now overrides its hook (`verifyRollbackLater()`), so it
+  confirms itself in `setup()` instead. That covers a crash before `setup()`.
+- **The trial** (from the start of `setup()`): the new firmware confirms
+  itself at once, so the bootloader lets it start again, and counts its own
+  starts in NVS (`fwtrial`, keyed by the slot and the image's ELF SHA-256). A
+  start is healthy when the uplink has been up for 30 s, or a page of the web
+  UI has been opened (or, with no network set, the access point is up after
+  30 s): the trial then ends and the firmware is kept. A start that is not
+  healthy within three minutes restarts the modem; a main loop not seen for a
+  minute restarts it too (an `esp_timer`, only while on trial); a crash, a
+  watchdog, a brownout or the power being pulled count the same. At the
+  fourth start the firmware marks itself invalid
+  (`esp_ota_mark_app_invalid_rollback_and_reboot`) and the bootloader boots the
+  previous one. If otadata has no entry for the previous firmware (it was
+  flashed over USB and this is the first update since), the firmware points
+  the bootloader at that slot with `esp_ota_set_boot_partition`. If there is
+  no image there at all, it gives up the trial and keeps running.
+
+The previous firmware shows *"Running the previous firmware: the update failed
+to start 3 times"* on the System page, as a line in `ATI` and as `FW=PREVIOUS`
+in `AT$STAT?` (`FW=TRIAL` while a firmware is on trial, `FW=OK` otherwise),
+until another firmware is written over the failed one. A firmware flashed
+over USB is never on trial (esptool leaves otadata blank), and a build from
+before the trial existed, sent over the web, is confirmed at once by the core, as before.
+`hosttest/test_fwtrial` runs the rules against a model of the bootloader's
+otadata (the cases above, a brownout, an older build, nothing to go back to).
+What only hardware can show: that the prebuilt bootloader really behaves as
+the model (try it with a build that crashes in `setup()` on purpose), and the
+restart reasons the log gives (`Firmware: the last restart was ...`).
 
 ### The web password in a public build
 
@@ -727,8 +771,12 @@ builds and runs:
   pass-through of oversize and refused pictures, and reader mode on
   synthetic pages (and on the saved real pages with `PAGES=`).
 
+- `test_fwtrial`: the firmware trial after an update (see `README.md`,
+  *Building and testing*).
+
 `hostmodem` (the modem as a PC program for the emulator's serial bridge)
-gains the same features, so `python3 tools/emu/net.py` keeps working.
+gains the same features, so `python3 core/tools/emu/net.py` (the emulator
+tests in psion-core, run from an app's checkout) keeps working.
 
 ### Measured (4 October 2026, this box)
 
@@ -763,7 +811,7 @@ and the checklist in `HARDWARE.md`.
    the Atom's RTS did not reach the Psion's CTS, or the polarity were wrong).
    Then a download in PsiTerm (`cat` a large file): no receive errors in the
    session log.
-3. **230400**: PsiKernTest (`experimental/kernel`) > Write > *Serial link
+3. **230400**: the kernel experiment > Write > *Serial link
    with the modem*. It sends `AT$SB=230400`, sets the 5mx's divider, runs
    `ATI` ten times, and goes back. With RTS/CTS on, repeat with `AT$PR=0`
    (no pacing) to see the line's real rate; with pacing, `AT$PACE?` shows
@@ -829,8 +877,9 @@ and the checklist in `HARDWARE.md`.
   (why pairing is needed for the carrier; the lockdownd protocol).
 - USB CDC Subclass specification for NCM 1.0 (NTB16 layout) and ECM 1.2.
 - MAX3232 datasheet (3.3 V operation, inverting drivers and receivers).
-- This repository: `ssh/psiglue.cpp` (what the apps send; `KConfigObeyCTS`;
-  `KConfigFailDCD`), `experimental/kernel/results/2026-10-03-5mx.md`
-  (`UBRCR` 1 for 230400 on a real 5mx), `docs/experimental-hacks.md`,
-  `docs/psiweb-modern-web-plan.md` (the PsiProxy idea), `mail/engine/img`
-  (the decoders).
+- The suite: `core/ssh/psiglue.cpp` (what the apps send; `KConfigObeyCTS`;
+  `KConfigFailDCD`) and `core/mail/engine/img` (the decoders), in
+  [psion-core](https://github.com/danieledge/psion-core); the kernel
+  experiment's results (`UBRCR` 1 for 230400 on a real 5mx) and its notes;
+  PsiWeb's `docs/psiweb-modern-web-plan.md` (the PsiProxy idea), in
+  [psiweb](https://github.com/danieledge/psiweb).

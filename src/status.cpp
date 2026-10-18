@@ -316,7 +316,11 @@ void PageHome(const Modem& m, Hal& h, ScreenPage& p)
 	p.vpnTone = tone;
 	p.vpnLocked = m.WgWant() == EWgWantUp;
 	char ap[96];
-	Copy(p.hint, sizeof(p.hint), ApUp(h, ap, sizeof(ap)) ? "1x Wi-Fi   2x password" : "1x Wi-Fi   2x details");
+	// (the next page: a module's, if it has one, else Wi-Fi)
+	const Extension* x = ExtPagePick(m);
+	char hint[32];
+	snprintf(hint, sizeof(hint), "1x %s   2x %s", x ? x->Name() : "Wi-Fi", ApUp(h, ap, sizeof(ap)) ? "password" : "details");
+	Copy(p.hint, sizeof(p.hint), hint);
 	}
 
 // a Home-style row: an icon and a few bold words (label: what it is, for
@@ -575,6 +579,9 @@ void PageCall(const Modem& m, Hal&, ScreenPage& p)
 		Row(p, "Last", m.LastDial()[0] ? m.LastDial() : "none yet");
 		if (m.LastDialResult()[0])
 			Row(p, "Result", m.LastDialResult());
+		for (int i = 0; i < m.ExtensionCount(); i++)
+			if (m.ExtensionAt(i)->CallPageRow(true, b, sizeof(b)))
+				Row(p, m.ExtensionAt(i)->Name(), b);
 		return;
 		}
 	if (m.PppCall())
@@ -587,6 +594,8 @@ void PageCall(const Modem& m, Hal&, ScreenPage& p)
 		}
 	else if (m.ExecCall())
 		Key(p, "Command");
+	else if (m.ExtCall())
+		Key(p, m.ExtCall()->Name());
 	else
 		{
 		Key(p, "TCP");
@@ -597,6 +606,10 @@ void PageCall(const Modem& m, Hal&, ScreenPage& p)
 	Row(p, "To Psion", n);
 	StatusModel::Count(m.ToServer(), n, sizeof(n));
 	Row(p, "To server", n);
+	// the extension modules' rows (over this call, or over PPP)
+	for (int i = 0; i < m.ExtensionCount(); i++)
+		if (m.ExtensionAt(i)->CallPageRow(false, b, sizeof(b)))
+			Row(p, m.ExtensionAt(i)->Name(), b);
 	if (!m.Online())
 		Line(p, "Command mode: ATO", EToneAmber);
 	}
@@ -616,6 +629,7 @@ void PageModes(const Modem& m, Hal&, ScreenPage& p)
 		}
 	Row(p, "PPP", m.Config2().ppp ? "On" : "Off");
 	Row(p, "TLS", m.Config2().tls ? "On" : "Off");
+
 	snprintf(b, sizeof(b), "%lu", (unsigned long)m.Config().baud);
 	Row(p, "Baud", b);
 	Row(p, "RTS/CTS", m.Config2().flow ? "On" : "Off");
@@ -762,8 +776,9 @@ void LayFoot(const ScreenPage& p, Pen& aPen)
 		return;
 		}
 	bool details = p.page >= EPageSetup;
-	int n = details ? kDetailPages : kMainPages;
-	int at = details ? p.page - EPageSetup : p.page;
+	// (the main ring: Home, a module's page if there is one, Wi-Fi, VPN)
+	int n = details ? kDetailPages : p.extPage ? 4 : 3;
+	int at = details ? p.page - EPageSetup : p.page == EPageHome ? 0 : p.page == EPageExt ? 1 : p.page + (p.extPage ? 1 : 0);
 	const int kGap = 9;
 	int x0 = (kScreenPx - (n - 1) * kGap) / 2;
 	for (int i = 0; i < n; i++)
@@ -1009,9 +1024,11 @@ void StatusModel::Fill(const Modem& aModem, Hal& aHal, int aPage, ScreenPage& aO
 	aOut.signal = -1;
 	int led = aModem.LedNow();
 	aOut.bar = led >= 0 ? (LedState)led : ELedNoWifi;
+	aOut.extPage = ExtPagePick(aModem) != 0;
 	switch (page)
 		{
-	case EPageHome:    PageHome(aModem, aHal, aOut); break;
+	case EPageHome:
+	case EPageExt:     PageHome(aModem, aHal, aOut); break;   // (a module draws its own: Home stands in)
 	case EPageNetwork: PageNetwork(aModem, aHal, aOut); break;
 	case EPageVpn:     PageVpn(aModem, aHal, aOut); break;
 	case EPageSetup:   PageSetup(aModem, aHal, aOut); break;
@@ -1064,20 +1081,91 @@ void StatusModel::LayMessage(const char* aLine1, const char* aLine2, const char*
 	pen.Centre(EFaceSans, FitSize(EFaceSans, t, kScreenPx - 2 * kMargin, kText - 1, 8), 96, grey, t);
 	}
 
+// ----- an extension module's page --------------------------------------------------
+
+static_assert(ExtPen::kText == kText && ExtPen::kSmall == kSmall && ExtPen::kMargin == kMargin && ExtPen::kBandH == kBandH
+	&& ExtPen::kHomeBandH == kHomeBandH, "ExtPen's measures must be the pages' own");
+
+uint16_t ExtPen::Tone(int aTone) const { return ToneColour(aTone); }
+void ExtPen::Fill(int aX, int aY, int aW, int aH, uint16_t aColour) { Pen(iL).Fill(aX, aY, aW, aH, aColour); }
+void ExtPen::Text(int aFace, int aSize, int aX, int aBase, uint16_t aColour, const char* aText, int aMaxW)
+	{ Pen(iL).Text(aFace, aSize, aX, aBase, aColour, aText, aMaxW); }
+void ExtPen::Right(int aFace, int aSize, int aRight, int aBase, uint16_t aColour, const char* aText, int aMaxW)
+	{ Pen(iL).Right(aFace, aSize, aRight, aBase, aColour, aText, aMaxW); }
+void ExtPen::Centre(int aFace, int aSize, int aBase, uint16_t aColour, const char* aText)
+	{ Pen(iL).Centre(aFace, aSize, aBase, aColour, aText); }
+int ExtPen::TextWidth(int aFace, int aSize, const char* aText) const { return StatusModel::TextWidth(aFace, aSize, aText); }
+int ExtPen::FitSize(int aFace, const char* aText, int aW, int aMax, int aMin) const { return am::FitSize(aFace, aText, aW, aMax, aMin); }
+void ExtPen::Dot(int aX, int aY, int aRadius, uint16_t aColour) { Pen(iL).Op(EOpDot, aX, aY, aRadius, 0, aColour); }
+
+void ExtPen::Icon(int aIcon, int aArg, int aX, int aY, uint16_t aColour)
+	{
+	Pen pen(iL);
+	LayIcon(pen, aIcon, aArg, aX, aY, aColour);
+	}
+
+void ExtPen::RoundBox(int aX, int aY, int aW, int aH, int aRadius, uint16_t aColour)
+	{
+	int r = aRadius;
+	if (r * 2 > aW) r = aW / 2;
+	if (r * 2 > aH) r = aH / 2;
+	if (r <= 0)
+		{
+		Fill(aX, aY, aW, aH, aColour);
+		return;
+		}
+	Pen pen(iL);
+	pen.Fill(aX + r, aY, aW - 2 * r, aH, aColour);
+	pen.Fill(aX, aY + r, aW, aH - 2 * r, aColour);
+	// the corners: dots centred half a pixel in, so the curve meets the edges
+	pen.Op(EOpDot, aX + r, aY + r, r, 0, aColour);
+	pen.Op(EOpDot, aX + aW - r, aY + r, r, 0, aColour);
+	pen.Op(EOpDot, aX + r, aY + aH - r, r, 0, aColour);
+	pen.Op(EOpDot, aX + aW - r, aY + aH - r, r, 0, aColour);
+	}
+
+void ExtPen::Picture(int aX, int aY, int aW, int aH, const uint8_t* aGreys, uint32_t aGen)
+	{
+	if (!aGreys || aW <= 0 || aH <= 0 || iL.pic)
+		{
+		if (iL.pic) iL.dropped++;               // (one picture a page)
+		return;
+		}
+	if (Pen(iL).Op(EOpPicture, aX, aY, aW, aH, 0))
+		{
+		iL.pic = aGreys;
+		iL.picGen = aGen;
+		}
+	}
+
+void StatusModel::LayExt(Extension& aExt, uint32_t aNowMs, Layout& aOut)
+	{
+	memset(&aOut, 0, sizeof(aOut));
+	Pen(aOut).Fill(0, 0, kScreenPx, kScreenPx, kBlack);
+	ExtPen pen(aOut);
+	aExt.ScreenDraw(pen, aNowMs);
+	}
+
 // ----- the gestures ----------------------------------------------------------
 
 void Pager::Click(uint32_t aNowMs)
 	{
 	iLastMs = aNowMs;
+	iPressed = true;
 	if (InDetails())
 		iPage = iPage + 1 < EPageCount ? iPage + 1 : EPageSetup;
+	else if (iPage == EPageHome)
+		iPage = iExtPage ? EPageExt : EPageNetwork;
+	else if (iPage == EPageExt)
+		iPage = EPageNetwork;
 	else
-		iPage = (iPage + 1) % kMainPages;
+		iPage = (iPage + 1) % EPageExt;      // (Wi-Fi -> VPN -> Home)
 	}
 
 Pager::TAction Pager::Double(uint32_t aNowMs)
 	{
 	iLastMs = aNowMs;
+	iPressed = true;
 	switch (iPage)
 		{
 	case EPageHome: iPage = EPageSetup; return ENothing;
@@ -1090,6 +1178,7 @@ Pager::TAction Pager::Double(uint32_t aNowMs)
 void Pager::ConfigMode(bool aOn, uint32_t aNowMs)
 	{
 	iLastMs = aNowMs;
+	iPressed = true;
 	iPage = aOn ? EPageSetup : EPageHome;
 	}
 

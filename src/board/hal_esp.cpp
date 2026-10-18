@@ -9,11 +9,16 @@
 #include "../cabundle.h"
 #include "wgtunnel.h"
 #include "pppdns.h"
+#include "pppoffline.h"
+#include "fwsafe.h"
 #include <Preferences.h>
 #include "lwip/netif.h"
 #include "lwip/tcpip.h"
 #include <esp_heap_caps.h>
 #include <esp_system.h>
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+#include <esp_random.h>
+#endif
 
 static const char* const kNvs = "atommodem";
 
@@ -22,7 +27,7 @@ static AtomHal* sAtomHal = 0;             // the one HAL, for the WiFi event cal
 AtomHal::AtomHal()
 	: iInternet(-1), iDnsOk(-1), iWifiFail(am::EWifiFailNone), iWifiEvents(false), iProbing(false), iProbePort(0), iCur(&iPlain), iWeb(0), iUsb(0), iBaud(115200), iTx(kPinTx),
 	  iRx(kPinRx), iRts(kPinRts), iCts(kPinCts), iDcdPin(-1), iFlow(false), iStarted(false), iRunning(false),
-	  iUsbStarted(false), iUsbWanted(false)
+	  iUsbStarted(false), iUsbWanted(false), iLedState(-1), iExtLed(false), iExtLedMs(0)
 	{
 	iProbeHost[0] = 0;
 	sAtomHal = this;                          // (for WifiEvent: there is one)
@@ -264,7 +269,8 @@ void AtomHal::WifiBegin(const char* aSsid, const char* aPass)
 	// default on this core, which parks the radio and drops the first inbound
 	// packets to a sleeping device (cold pings/HTTP time out until it is warm;
 	// it has bitten OTA and the web UI). Off = the web UI/OTA answer at once.
-	WiFi.setSleep(false);
+	// (On while a module uses Bluetooth: the radio's coexistence needs it.)
+	WiFi.setSleep(iRadioShared);
 	char m[80];
 	snprintf(m, sizeof(m), "WiFi: joining \"%s\"", aSsid);
 	Log(m);
@@ -287,6 +293,12 @@ void AtomHal::WifiHardReset()
 void AtomHal::WifiInfo(char* aOut, size_t aMax)
 	{
 	snprintf(aOut, aMax, "\"%s\" IP %s RSSI %d", WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), (int)WiFi.RSSI());
+	}
+
+void AtomHal::RadioShared(bool aShared)
+	{
+	iRadioShared = aShared;
+	WiFi.setSleep(aShared);                   // (modem sleep while Bluetooth shares the radio; off again after)
 	}
 
 int AtomHal::WifiScan(char aNames[][33], int aMax)
@@ -511,11 +523,8 @@ void AtomHal::Restart()
 
 // ----- the LED, the web pages ----------------------------------------------------------
 
-void AtomHal::Led(am::LedState aState)
+static void ModemLed(int aState)
 	{
-#if defined(AM_HAS_LCD)
-	am::gScreen.SetBar(aState);               // the LCD's bar: the same state as the LED's
-#endif
 	switch (aState)
 		{
 	case am::ELedNoWifi:     LedWrite(24, 0, 0); break;    // red
@@ -525,6 +534,42 @@ void AtomHal::Led(am::LedState aState)
 	case am::ELedData:       LedWrite(24, 24, 48); break;  // white flash
 	case am::ELedConfig:     LedWrite(24, 0, 32); break;   // purple: the access point is up
 		}
+	}
+
+void AtomHal::Led(am::LedState aState)
+	{
+#if defined(AM_HAS_LCD)
+	am::gScreen.SetBar(aState);               // the LCD's bar: the same state as the LED's
+#endif
+	iLedState = aState;
+	if (!iExtLed)                             // (a module's light: LedTick decides)
+		ModemLed(aState);
+	}
+
+void AtomHal::LedTick(const am::Modem& aModem, bool aBusy, uint32_t aNowMs)
+	{
+	if (kPinLed < 0)
+		return;                               // (no WS2812: the LCD shows the module's page instead)
+	am::ExtLed l;
+	bool ext = am::ExtLedPick(aModem, iLedState, aBusy, l);
+	if (!ext)
+		{
+		if (iExtLed)
+			{
+			iExtLed = false;
+			ModemLed(iLedState);              // the modem's own state, at once
+			}
+		return;
+		}
+	// about 50 times a second is smooth enough for a pulse, and keeps the
+	// WS2812's (RMT) writes out of most passes
+	if (iExtLed && aNowMs - iExtLedMs < 20)
+		return;
+	iExtLed = true;
+	iExtLedMs = aNowMs;
+	uint8_t r, g, b;
+	am::ExtLedLevel(l, aNowMs, r, g, b);
+	LedWrite(r, g, b);
 	}
 
 void AtomHal::ApplyWeb(const am::Settings2& aS2)
@@ -559,6 +604,41 @@ void AtomHal::WebInfo(char* aOut, size_t aMax)
 		aOut[0] = 0;
 	}
 
+// big buffers for extension modules (ext.h): PSRAM where there is some;
+// else only while the internal heap keeps enough for WiFi and a TLS connection
+static const size_t kBigKeepFree = 40 * 1024;
+
+void AtomHal::Random(uint8_t* aOut, size_t aLen)
+	{
+	esp_fill_random(aOut, aLen);              // (the RF subsystem is on: true random)
+	}
+
+bool AtomHal::BigRoom(size_t aLen)
+	{
+#if defined(BOARD_HAS_PSRAM)
+	if (psramFound())
+		return heap_caps_get_free_size(MALLOC_CAP_SPIRAM) >= aLen + 64 * 1024;
+#endif
+	size_t free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+	size_t big = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+	return free >= aLen + kBigKeepFree && big >= (aLen < 80 * 1024 ? aLen : 80 * 1024);
+	}
+
+void* AtomHal::BigAlloc(size_t aLen)
+	{
+#if defined(BOARD_HAS_PSRAM)
+	if (psramFound())
+		return heap_caps_malloc(aLen, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+#endif
+	return BigRoom(aLen) ? malloc(aLen) : 0;
+	}
+
+int AtomHal::FirmwareInfo(char* aOut, size_t aMax)
+	{
+	am::gFwSafe.Text(aOut, aMax);
+	return am::gFwSafe.Show();
+	}
+
 // ----- 2.2: the uplink's address, the tunnel, the DNS relay, the new records -------------
 
 bool AtomHal::UplinkAddr(uint32_t& aIp, uint32_t& aMask)
@@ -591,14 +671,29 @@ bool AtomHal::DnsRelayStart()
 
 void AtomHal::DnsRelayStop()
 	{
+	char m[128];
+	uint32_t refused = am::PppOfflineTake();
+	if (refused)
+		{
+		snprintf(m, sizeof(m), "ppp: %lu packets for the outside answered at once (no uplink)", (unsigned long)refused);
+		Log(m);
+		}
 	if (!am::gPppDns.Running())
 		return;
 	const am::DnsRelay& r = am::gPppDns.Relay();
-	char m[96];
-	snprintf(m, sizeof(m), "ppp: DNS relay: %lu queries, %lu answered, %lu timed out, %lu dropped",
-		(unsigned long)r.Forwarded(), (unsigned long)r.Answered(), (unsigned long)r.TimedOut(), (unsigned long)r.Dropped());
+	snprintf(m, sizeof(m), "ppp: DNS relay: %lu queries, %lu answered, %lu timed out, %lu dropped, %lu refused (no uplink)",
+		(unsigned long)r.Forwarded(), (unsigned long)r.Answered(), (unsigned long)r.TimedOut(), (unsigned long)r.Dropped(),
+		(unsigned long)r.Refused());
 	Log(m);
 	am::gPppDns.Stop();
+	}
+
+// no uplink: the relay answers DNS itself, and the Psion's connections to
+// the outside are refused at once (board/pppoffline.h)
+void AtomHal::PppUplink(bool aUp)
+	{
+	am::gPppDns.SetOffline(!aUp);
+	am::PppOfflineSet(!aUp);
 	}
 
 void AtomHal::DnsRelayUpstream(uint32_t aServer)

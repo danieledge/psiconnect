@@ -1,6 +1,6 @@
 # Test report: Atom modem 2.0, 4 October 2026
 
-Environment: Ubuntu 24.04 on `a Linux PC`, g++ 13.3, zlib, python3
+Environment: Ubuntu 24.04 on a Linux PC, g++ 13.3, zlib, python3
 3.12 with Pillow 11.3, PlatformIO 6.2.0 (in a scratch venv); platforms
 pioarduino `platform-espressif32` 53.03.13 (Arduino-ESP32 3.1.3, ESP-IDF
 5.3.0) and `espressif32@6.9.0` (Arduino-ESP32 2.0.17). No AtomS3 Lite, no

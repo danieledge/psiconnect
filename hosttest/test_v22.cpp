@@ -10,6 +10,7 @@
 #include "fakehal.h"
 #include "../src/status.h"
 #include "../src/button.h"
+#include "../src/canvas.h"
 #include <stdlib.h>
 #include <time.h>
 
@@ -363,6 +364,58 @@ static void TestDnsRelay()
 		&& nw[0] == 0x40 && nw[1] == am::DnsRelay::kSlots + 3);
 	}
 
+// ----- the relay with no uplink: every query answered at once, SERVFAIL -------------------------
+static void TestDnsRelayOffline()
+	{
+	am::DnsRelay r;
+	// a query: its answer, in place: the same ID, QR and RA, RD as asked, rcode 2, the question kept
+	std::vector<uint8_t> q = Query(0xbeef, "p12345.invalid"), orig = q;
+	size_t n = r.Refuse(q.data(), q.size());
+	CHECK(n == orig.size() && q[0] == 0xbe && q[1] == 0xef);
+	CHECK(q[2] == 0x81 && q[3] == 0x82 && (q[3] & 0x0f) == am::DnsRelay::kOfflineRcode);
+	CHECK(q[4] == 0 && q[5] == 1 && q[6] == 0 && q[7] == 0 && q[8] == 0 && q[9] == 0 && q[10] == 0 && q[11] == 0);
+	CHECK(memcmp(q.data() + 12, orig.data() + 12, orig.size() - 12) == 0);
+	CHECK(r.Refused() == 1 && r.Pending() == 0 && r.Forwarded() == 0);
+	// RD clear stays clear
+	std::vector<uint8_t> q2 = Query(7); q2[2] = 0x00;
+	CHECK(r.Refuse(q2.data(), q2.size()) && q2[2] == 0x80);
+	// an EDNS record after the question is left off the answer
+	std::vector<uint8_t> e = Query(8);
+	size_t qlen = e.size();
+	e[11] = 1;                                                        // ARCOUNT 1
+	const uint8_t opt[] = { 0, 0, 41, 0x10, 0, 0, 0, 0, 0, 0, 0 };
+	e.insert(e.end(), opt, opt + sizeof(opt));
+	CHECK(r.Refuse(e.data(), e.size()) == qlen && e[10] == 0 && e[11] == 0);
+	// garbage: not a query, no question, a name that runs off the end, a
+	// pointer, a label too long, a name over 255, no room for type and class
+	std::vector<uint8_t> g1(5, 0), g2 = Query(1), g3 = Query(2), g4 = Query(3), g5 = Query(4), g6 = Query(5), g7 = Query(6);
+	g2[2] |= 0x80;                                                    // an answer
+	g3[5] = 0;                                                        // no question
+	g4.resize(15);                                                    // the name cut short
+	g5[12] = 0xc0;                                                    // a pointer
+	g6[12] = 64;                                                      // a label of 64
+	g7.resize(g7.size() - 2);                                         // half the class
+	std::vector<uint8_t> g8 = { 0, 1, 0x01, 0, 0, 1, 0, 0, 0, 0, 0, 0 };
+	for (int i = 0; i < 5; i++) { g8.push_back(63); g8.insert(g8.end(), 63, 'a'); }
+	g8.push_back(0); g8.push_back(0); g8.push_back(1); g8.push_back(0); g8.push_back(1);   // 320 bytes of name
+	uint32_t refused = r.Refused(), dropped = r.Dropped();
+	CHECK(!r.Refuse(g1.data(), g1.size()) && !r.Refuse(g2.data(), g2.size()) && !r.Refuse(g3.data(), g3.size())
+		&& !r.Refuse(g4.data(), g4.size()) && !r.Refuse(g5.data(), g5.size()) && !r.Refuse(g6.data(), g6.size())
+		&& !r.Refuse(g7.data(), g7.size()) && !r.Refuse(g8.data(), g8.size()) && !r.Refuse(0, 40));
+	CHECK(r.Refused() == refused && r.Dropped() == dropped + 9);
+	// random bytes: never a crash, never an answer longer than the query
+	for (int i = 0; i < 5000; i++)
+		{
+		std::vector<uint8_t> x(1 + rand() % 600);
+		for (auto& b : x) b = (uint8_t)rand();
+		if (rand() & 1) { x.resize(x.size() < 12 ? 12 : x.size()); x[2] &= 0x07; x[4] = 0; x[5] = 1; x[6] = x[7] = 0; }
+		size_t m = r.Refuse(x.data(), x.size());
+		CHECK(m <= x.size());
+		}
+	r.Reset();
+	CHECK(r.Refused() == 0);
+	}
+
 // ----- the saved networks ---------------------------------------------------------------------
 static am::WifiNet Net(const char* s, int rssi)
 	{
@@ -579,7 +632,7 @@ static void TestWgModem()
 		&& Has(g, "+STAT:WGRX=1234\r\n") && Has(g, "+STAT:WGTX=567\r\n") && Has(g, "+STAT:WGEP=\"vpn.example.org:51820\"")
 		&& Has(g, "+STAT:NETS=") && Has(g, "+STAT:DNS=-1"));
 	// the 2.1 lines are all still there, before the new ones
-	CHECK(g.find("+STAT:FC=") < g.find("+STAT:DNS=") && Has(g, "+STAT:VER=2.2") && Has(g, "+STAT:WIFI="));
+	CHECK(g.find("+STAT:FC=") < g.find("+STAT:DNS=") && Has(g, "+STAT:VER=2.3") && Has(g, "+STAT:WIFI="));
 	// home: Auto takes it down
 	r.hal.upIp = am::Ip4(192, 168, 10, 50); r.hal.upMask = am::Ip4(255, 255, 255, 0);
 	r.Run(1100);
@@ -794,6 +847,133 @@ static void TestPages()
 	CHECK(!strcmp(p.vpn, "VPN off") && p.vpnTone == am::EToneGrey);   // off: a grey "VPN off" on Home
 	}
 
+// ----- an extension module's page on the LCD and light on the LED (ext.h) ---------------
+struct SampleExt : am::Extension
+	{
+	bool want = false, led = false, page = false;
+	uint32_t news = 0, gen = 1;
+	uint8_t over = am::EExtLedOverCall;
+	uint8_t pic[16 * 4];
+	SampleExt() { for (int i = 0; i < 64; i++) pic[i] = (uint8_t)(i * 4); }
+	const char* Name() const override { return "Sample"; }
+	bool ScreenWanted() const override { return want; }
+	bool HasPage() const override { return page; }
+	uint32_t ScreenNews() const override { return news; }
+	void ScreenDraw(am::ExtPen& aPen, uint32_t aNowMs) override
+		{
+		aPen.Fill(0, 0, am::ExtPen::kSize, am::ExtPen::kBandH, aPen.Tone(am::EToneRed));
+		aPen.Text(am::EFaceBold, am::ExtPen::kText + 1, am::ExtPen::kMargin, 16, aPen.Tone(am::EToneWhite), "Sample");
+		aPen.Picture(10, 30, 16, 4, pic, gen);
+		aPen.RoundBox(8, 100, 112, 20, 4, aPen.Tone(am::EToneAmber));
+		}
+	bool LedWanted(am::ExtLed& aOut) const override
+		{
+		if (!led) return false;
+		aOut = am::ExtLed{ 0, 40, 40, am::EExtLedPulse, 2000, over };
+		return true;
+		}
+	};
+
+static void TestExtHooks()
+	{
+	Rig r(false);
+	SampleExt x, y;
+	CHECK(r.modem == 0);
+	r.ring.assign(64 * 1024, 0);
+	r.modem = new am::Modem(r.hal, r.ring.data(), r.ring.size());
+	CHECK(r.modem->AddExtension(x) && r.modem->AddExtension(y));
+	r.modem->Begin();
+	// the page: the first module that wants the screen
+	CHECK(am::ExtScreenPick(*r.modem) == 0);
+	y.want = true;
+	CHECK(am::ExtScreenPick(*r.modem) == &y);
+	x.want = true;
+	CHECK(am::ExtScreenPick(*r.modem) == &x);
+	// a page in the button's ring: the first module that has one. Home's hint
+	// names it, and the ring's dots count it
+	am::ScreenPage sp;
+	am::StatusModel::Fill(*r.modem, r.hal, am::EPageHome, sp);
+	CHECK(am::ExtPagePick(*r.modem) == 0 && !sp.extPage && strncmp(sp.hint, "1x Wi-Fi   2x ", 14) == 0);
+	am::Layout la;
+	am::StatusModel::Lay(sp, la);
+	int dots = 0;
+	for (int i = 0; i < la.n; i++) dots += la.op[i].op == am::EOpDot;
+	CHECK(dots == 3);
+	y.page = true;
+	CHECK(am::ExtPagePick(*r.modem) == &y);
+	am::StatusModel::Fill(*r.modem, r.hal, am::EPageHome, sp);
+	CHECK(sp.extPage && strncmp(sp.hint, "1x Sample   2x ", 15) == 0);
+	am::StatusModel::Lay(sp, la);
+	dots = 0;
+	for (int i = 0; i < la.n; i++) dots += la.op[i].op == am::EOpDot;
+	CHECK(dots == 4);
+	am::StatusModel::Fill(*r.modem, r.hal, am::EPageVpn, sp);
+	am::StatusModel::Fill(*r.modem, r.hal, am::EPageExt, sp);
+	CHECK(sp.page == am::EPageExt);              // (laid out by the module; Home stands in)
+	y.page = false;
+	// when it may show: on Home with no press for a while; never over Setup
+	am::Pager pg;
+	CHECK(pg.Quiet(1000));                                      // (no press since start)
+	pg.Click(5000);                                             // -> Wi-Fi
+	CHECK(!pg.Quiet(6000));
+	pg.Click(6000); pg.Click(7000);                             // round to Home: still the pages, for a while
+	CHECK(pg.Page() == am::EPageHome && !pg.Quiet(8000) && !pg.Quiet(7000 + am::Pager::kHomeAfterMs - 1));
+	CHECK(pg.Quiet(7000 + am::Pager::kHomeAfterMs));
+	pg.ConfigMode(true, 50000);
+	CHECK(!pg.Idle(50000 + 10 * am::Pager::kDetailsHomeAfterMs, true));                        // (the access point up: Setup stays)
+	CHECK(pg.Page() == am::EPageSetup && !pg.Quiet(50000 + 10 * am::Pager::kDetailsHomeAfterMs));
+	pg.Click(200000);                                           // a Details page
+	CHECK(!pg.Quiet(200000 + am::Pager::kHomeAfterMs));
+	CHECK(pg.Idle(200000 + am::Pager::kDetailsHomeAfterMs, false) && pg.Quiet(200000 + am::Pager::kDetailsHomeAfterMs));
+	// laid out with ExtPen, on black; the picture drawn as greys, compared by its generation
+	am::Layout a, b;
+	am::StatusModel::LayExt(x, 0, a);
+	am::StatusModel::LayExt(x, 0, b);
+	CHECK(a.dropped == 0 && a.pic == x.pic && a.picGen == 1 && memcmp(&a, &b, sizeof(a)) == 0);
+	x.gen = 2;
+	am::StatusModel::LayExt(x, 0, b);
+	CHECK(memcmp(&a, &b, sizeof(a)) != 0);
+	bool picOp = false;
+	for (int i = 0; i < a.n; i++)
+		if (a.op[i].op == am::EOpPicture && a.op[i].x == 10 && a.op[i].y == 30 && a.op[i].w == 16 && a.op[i].h == 4) picOp = true;
+	CHECK(picOp && a.op[0].op == am::EOpFill && a.op[0].fg == 0);
+	static uint16_t fb[am::Canvas::kSize * am::Canvas::kSize];
+	am::Canvas::Render(a, fb);
+	CHECK(fb[30 * 128 + 10] == 0 && fb[33 * 128 + 25] == am::Rgb565(252, 252, 252) && fb[31 * 128 + 12] == am::Rgb565(72, 72, 72));
+	CHECK(fb[127 * 128 + 0] == 0 && fb[110 * 128 + 64] == a.op[a.n - 1].fg);   // (the box, inside; black below)
+	// the LED: a module's light over the states it names, never over no Wi-Fi,
+	// the access point or an update; the strongest of those asking
+	am::ExtLed l;
+	CHECK(!am::ExtLedPick(*r.modem, am::ELedWifi, false, l));   // (nobody asking)
+	x.led = true;
+	CHECK(am::ExtLedPick(*r.modem, am::ELedWifi, false, l) && l.g == 40 && l.style == am::EExtLedPulse);
+	CHECK(am::ExtLedPick(*r.modem, am::ELedConnected, false, l) && am::ExtLedPick(*r.modem, am::ELedData, false, l));
+	CHECK(!am::ExtLedPick(*r.modem, am::ELedConnecting, false, l));
+	CHECK(!am::ExtLedPick(*r.modem, am::ELedNoWifi, false, l) && !am::ExtLedPick(*r.modem, am::ELedConfig, false, l));
+	CHECK(!am::ExtLedPick(*r.modem, -1, false, l) && !am::ExtLedPick(*r.modem, am::ELedWifi, true, l));
+	x.over = am::EExtLedOverIdle;
+	CHECK(am::ExtLedPick(*r.modem, am::ELedWifi, false, l) && !am::ExtLedPick(*r.modem, am::ELedConnected, false, l));
+	y.led = true; y.over = am::EExtLedOverDial;
+	CHECK(am::ExtLedPick(*r.modem, am::ELedConnecting, false, l) && l.over == am::EExtLedOverDial);
+	// its colour in time: a pulse never quite out, a blink on then off
+	uint8_t cr, cg, cb;
+	am::ExtLed p = { 0, 200, 100, am::EExtLedPulse, 2000, am::EExtLedOverCall };
+	am::ExtLedLevel(p, 0, cr, cg, cb);
+	CHECK(cr == 0 && cg == 25 && cb == 12);
+	am::ExtLedLevel(p, 1000, cr, cg, cb);
+	CHECK(cg == 200 && cb == 100);
+	am::ExtLedLevel(p, 2500, cr, cg, cb);
+	CHECK(cg > 25 && cg < 200);
+	p.style = am::EExtLedBlink;
+	am::ExtLedLevel(p, 100, cr, cg, cb);
+	CHECK(cg == 200);
+	am::ExtLedLevel(p, 1100, cr, cg, cb);
+	CHECK(cg == 0 && cb == 0);
+	p.style = am::EExtLedSteady;
+	am::ExtLedLevel(p, 1100, cr, cg, cb);
+	CHECK(cg == 200);
+	}
+
 int main()
 	{
 	srand((unsigned)time(0));
@@ -801,6 +981,7 @@ int main()
 	printf("wireguard keys from wg\n"); TestWgRealKeys();
 	printf("wireguard decisions and routing\n"); TestWgDecide();
 	printf("dns relay\n"); TestDnsRelay();
+	printf("dns relay offline\n"); TestDnsRelayOffline();
 	printf("saved networks\n"); TestNetList();
 	printf("saved networks in the modem\n"); TestSavedNetsModem();
 	printf("wireguard in the modem\n"); TestWgModem();
@@ -809,6 +990,7 @@ int main()
 	printf("schema coverage\n"); TestSchemaCoverage();
 	printf("double-press\n"); TestDoublePress();
 	printf("pages\n"); TestPages();
+	printf("extension page and light\n"); TestExtHooks();
 	printf("%d checks, %d failed\n", gChecks, gFails);
 	return gFails ? 1 : 0;
 	}

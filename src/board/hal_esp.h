@@ -45,6 +45,7 @@ public:
 	bool WifiUp() override { return WiFi.status() == WL_CONNECTED; }
 	void WifiBegin(const char* aSsid, const char* aPass) override;
 	void WifiHardReset() override;
+	void RadioShared(bool aShared) override;
 	void WifiEnd() override { WiFi.disconnect(true); }
 	void WifiInfo(char* aOut, size_t aMax) override;
 	int WifiScan(char aNames[][33], int aMax) override;
@@ -60,6 +61,7 @@ public:
 	bool DnsRelayStart() override;
 	void DnsRelayStop() override;
 	void DnsRelayUpstream(uint32_t aServer) override;
+	void PppUplink(bool aUp) override;
 	bool LoadNets(am::NetList& aL, size_t& aLength) override;
 	bool SaveNets(const am::NetList& aL) override;
 	bool LoadWg(am::WgConfig& aC, size_t& aLength) override;
@@ -78,6 +80,10 @@ public:
 	void ApplyUplink(const am::Settings2& aS2) override;
 	void ApInfo(char* aOut, size_t aMax) override;
 	void WebInfo(char* aOut, size_t aMax) override;
+	int FirmwareInfo(char* aOut, size_t aMax) override;
+	void Random(uint8_t* aOut, size_t aLen) override;
+	void* BigAlloc(size_t aLen) override;
+	bool BigRoom(size_t aLen) override;
 
 	// the pins in use (after the settings, swaps and the board's defaults)
 	int PinTx() const { return iTx; }
@@ -86,6 +92,9 @@ public:
 	int PinCts() const { return iCts; }
 	bool Flow() const { return iFlow; }
 	static void NvsClear();
+	// from loop(): an extension module's light on the LED (ext.h: ExtLedPick),
+	// or the modem's own state back. aBusy: a firmware update is being written
+	void LedTick(const am::Modem& aModem, bool aBusy, uint32_t aNowMs);
 
 private:
 	void StartSerial();
@@ -96,6 +105,7 @@ private:
 	volatile int iDnsOk;                      // ... its DNS lookup: -1, 0, 1
 	volatile int iWifiFail;                   // am::TWifiFail since the last WifiBegin
 	bool iWifiEvents;                         // WifiEvent is registered
+	bool iRadioShared = false;                // Bluetooth is on too (RadioShared): modem sleep stays on
 	volatile bool iProbing;
 	char iProbeHost[40];
 	uint16_t iProbePort;
@@ -111,6 +121,9 @@ private:
 	bool iRunning;
 	bool iUsbStarted;
 	bool iUsbWanted;
+	int iLedState;                            // the modem's LED state, last set (-1 none yet)
+	bool iExtLed;                             // a module's light is showing in its place
+	uint32_t iExtLedMs;                       // when it was last written
 	};
 
 #endif

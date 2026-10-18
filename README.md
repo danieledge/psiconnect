@@ -12,6 +12,19 @@ From 2.2 the firmware calls itself **PsiConnect**: `ATI`, the web pages and
 the access point use that name. The rest of the repository still calls it
 the Atom modem. Version 2.2 is in use on an AtomS3R with a Psion 5mx.
 
+**The suite:** PsiConnect is the modem of the Psion suite, with
+[PsiTerm](https://github.com/danieledge/psiterm) (SSH),
+[PsiMail](https://github.com/danieledge/psimail) (email and calendar),
+[PsiWeb](https://github.com/danieledge/psiweb) (web browser),
+[PsiCast](https://github.com/danieledge/psicast) (screen sharing, as an
+extension module of this firmware),
+[PsiLinux](https://github.com/danieledge/psilinux),
+[PsiProxy](https://github.com/danieledge/psiproxy) and the shared
+[psion-core](https://github.com/danieledge/psion-core). The suite's home
+page is [danieledge.github.io/psion](https://danieledge.github.io/psion/).
+Until October 2026 this firmware lived in the PsiTerm repository as
+`firmware/atom-modem`; its history carries on here.
+
 Version 2.0 adds: the internet from an **iPhone through its Personal
 Hotspot** (the Atom joins it as a WiFi network; this is the supported path,
 with an Internet check, rejoining and diagnostics); **web pages** for every
@@ -41,6 +54,11 @@ networks**, joined by strength and switched by hand; and every setting from
 the terminal, PsiConnect and the web pages alike. See
 [WireGuard](#wireguard-the-home-network-from-anywhere-22) and
 [Saved networks](#saved-networks-22).
+
+Version 2.3 adds a **safety net for web updates**: a new firmware that
+fails to start three times gives way to the previous one by itself, so an
+update sent over WiFi can't leave the Atom needing a USB cable. 2.3 has
+been tested on the PC (host tests) but not yet on an Atom.
 
 MIT licence, as the rest of the repository (see `LICENSE` at the top).
 
@@ -168,7 +186,8 @@ own USB; the plain Atom shows up as a USB serial port (CH9102 or FTDI).
 
 ```sh
 pip install platformio
-cd firmware/atom-modem
+git clone --recurse-submodules https://github.com/danieledge/psiconnect.git
+cd psiconnect
 pio run -e atoms3r -t upload         # the AtomS3R (ESP32-S3, with the screen)
 pio run -e atoms3-lite -t upload     # the AtomS3 Lite (ESP32-S3)
 pio run -e m5stack-atom -t upload    # the plain Atom Lite / Matrix (ESP32)
@@ -180,8 +199,8 @@ pio device monitor                   # optional: the USB status console, 115200 
 2.0.17) for the plain Atom. The AtomS3R also uses M5Unified (for its screen),
 and the S3 boards use WireGuard, vendored and pinned in `lib/wireguard`
 (see its `library.json`). The Arduino IDE
-no longer builds 2.0 on its own (the picture converter compiles PsiMail's
-decoders from `../../mail/engine/img`).
+no longer builds 2.0 on its own (the picture converter compiles the suite's
+shared picture decoders from `core/mail/engine/img`).
 
 **An AtomS3 Lite in USB host mode** (`AT$USB=1`) cannot be programmed until
 the port is a device again: either `AT$USB=0`, `AT&W`, `ATZ`, or hold the
@@ -559,7 +578,7 @@ last until power-off; **`AT&W` saves them**.
 | `AT` | `OK` |
 | `ATDT host:port` | Opens a TCP connection and answers `CONNECT <baud>`; `NO CARRIER` if it cannot. `ATDThost:port`, `ATD host:port`, `ATDP…` and `ATDT"host:port"` also work. With no port, 23 is used |
 | `ATDT psiproxy:8080` | The modem's own [web proxy](#the-web-proxy-for-psiweb) (any port): `CONNECT`, then HTTP proxy requests are answered by the modem |
-| `ATDT777` (digits only) | A phone number means [PPP](#ppp-the-psions-own-internet): `CONNECT`, then the serial line is a PPP link (on by default; `AT$PPP=0` turns it off, and then it is `NO CARRIER`). `NO CARRIER` on a board without PPP (the plain Atom) |
+| `ATDT777` (digits only) | A phone number means [PPP](#ppp-the-psions-own-internet): `CONNECT`, then the serial line is a PPP link (on by default; `AT$PPP=0` turns it off, and then it is `NO CARRIER`). With no uplink it still connects, for the modem's own services. `NO CARRIER` on a board without PPP (the plain Atom) |
 | `+++` | Quiet for the guard time, `+++`, then quiet again: back to command mode with the connection still up (`OK`). The pluses are not passed to the server |
 | `ATO` | Back to the connection (`CONNECT`), or `NO CARRIER` if it has gone |
 | `ATH`, `ATH0` | Hangs up |
@@ -629,6 +648,7 @@ The full reference is in [`docs/UPGRADE.md`, section 6](docs/UPGRADE.md#6-at-com
 | `AT$WGCONF?` | (2.2) The tunnel's config as far as it may be shown: `+WGCONF:Address: ...`, `DNS`, `AllowedIPs`, `Endpoint`, `Keepalive`, and `Private key: set` |
 | `AT$WGL=line` ... `AT$WGL=END` | (2.2) A config sent line by line from a terminal (`AT$WGL=CLEAR` starts again). Send each line quoted with `\/` for a `/` (a key can hold an `a/`, which would otherwise be the `A/` repeat). `END` parses and saves it, or answers `+WGERR:<why>` and `ERROR`. Never logged. The web page is easier |
 | `AT$WGCLR=YES` | (2.2) Deletes the WireGuard config |
+| `AT$STAT?` | (2.3) adds `FW=OK/TRIAL/PREVIOUS`, for a firmware update on trial |
 
 Secrets (`$PASS`, `$APPASS`, `$WEBPASS`, `$XK`, the WireGuard keys) are never
 printed: `?` says *(set)* or *(none)*, and the log leaves them out.
@@ -735,9 +755,37 @@ from the server the query went to. So one setting, 192.168.7.1, works at
 home, on a hotspot and through the tunnel. (Before 2.2 nothing answered on
 192.168.7.1 and the Psion needed a real server: a home router's address
 then failed away from home. 1.1.1.1 still works with 2.2, but without the
-home names.) If port 53 is already taken (the access point's captive DNS
-during setup), the relay does not start and the dial logs that the Psion
-was given the uplink's DNS instead.
+home names.) The relay shares port 53 with the access point's captive DNS
+(the relay answers 192.168.7.1, the access point's DNS the rest); if it
+cannot start all the same, the dial logs that the Psion was given the
+uplink's DNS instead.
+
+**With no uplink:** a PPP dial still comes up when the modem has no WiFi
+or USB uplink, for the modem's own services on 192.168.7.1: its web
+pages, AT commands on port 2323 and any extension module's ports (the web
+proxy and the mail relay need the outside world). The log says
+`ppp: no uplink - only the modem's own services until it comes back`.
+Meanwhile the outside world fails at once rather than timing out: the DNS
+relay answers every query itself with SERVFAIL ("the server cannot answer
+now"), a new TCP connection to the outside is reset, and other packets
+for the outside (UDP) get an ICMP "network unreachable". A connection that
+was already open is left alone, so a moment without WiFi does not end it.
+When the uplink comes up during the call the outside world works again
+with no redial, and the call is never dropped because the uplink went.
+Addresses on a network the modem is on itself, such as its access
+point's, are reached as ever.
+
+**Watching from a phone with no WiFi network:** the modem's own access
+point works without an uplink. It is up while no network is saved, for
+ten minutes in config mode (the button: see
+[Status LED and button](#status-led-and-button)), or always with
+`AT$WEB=AP` (`AT$WEB=2`) and `AT&W`; `AT$WEB=ON` and `AT&W` go back to
+normal. Join `PsiConnect-xxxx` (`AT$AP?` gives its name; the password is
+on the USB console, in `AT$LOG?` and on the AtomS3R's Setup page) and use
+the modem's address there, 192.168.4.1: the web pages and the extension
+modules' ports answer on it too. While a network is saved but out of
+reach the modem keeps trying to join it, which can interrupt the access
+point for a moment now and then; with no network saved it does not.
 
 RTS/CTS (`AT$FC=1`) and a higher baud rate are strongly
 recommended: PPP frames are paced at the same rate as everything else.
@@ -790,7 +838,10 @@ opens on **Home** and goes back to Home after 30 seconds without a press
 (90 seconds in the Details). The backlight dims after a minute; a press on a
 dimmed screen only wakes it. The dots at the foot show where you are (three
 for the main pages, six in the Details); for four seconds after each press
-they give way to what a press (`1x`) and a double-press (`2x`) do there.
+they give way to what a press (`1x`) and a double-press (`2x`) do there. An
+extension module (below) can add a page of its own to the main pages, the
+next after Home (a fourth dot; a double-press there goes back to Home), and
+can show it over Home by itself while it has something to show.
 
 **Home** shows only the essentials: the state on a band in the LED's colour
 (*Ready*, *In call*, *Dialling*, *No Wi-Fi*, *Setup*), then three large rows,
@@ -853,6 +904,11 @@ AtomS3 Lite and Atom have the WS2812.
 | white flash | data moving |
 | purple | the access point is up (config mode, or no network saved) |
 
+An extension module built in (`src/ext.h`) may show a light of its own in
+place of green or blue, and on the AtomS3R a page of its own over Home
+while it has something to show (a press brings the pages back for a
+while). Red, amber, purple and a firmware update always win.
+
 **Factory reset:** hold the button while plugging the Atom in. The LED
 flashes white (on the AtomS3R the screen counts "Hold for reset 3..2..1");
 after 3 seconds every setting, including the WiFi network, returns to the
@@ -886,9 +942,29 @@ DCD on all the time.
 
 ## Building and testing
 
-- `pio run` builds the firmware. `arduino-cli compile --fqbn
-  esp32:esp32:m5stack-atom .` builds it the Arduino way, with no warnings
-  at `--warnings all`.
+- The shared picture decoders and zlib come from
+  [psion-core](https://github.com/danieledge/psion-core), the git submodule
+  `core/`: clone with `--recurse-submodules`, or run
+  `git submodule update --init` in a checkout made without it.
+- `pio run -e atoms3r` (or `atoms3-lite`, `m5stack-atom`) builds the
+  firmware. `arduino-cli compile --fqbn esp32:esp32:m5stack-atom .` used to
+  build it the Arduino way; since 2.0 the sketch needs the sources in
+  `core/`, which the IDE will not find from a sketch folder.
+- `make -C hosttest test` runs the host tests (below).
+- Extension modules (`src/ext.h`): optional parts kept outside this tree.
+  A module is a directory with a `module.json` (its sources, include
+  directories, defines and libraries, for every board or per chip); a link
+  to it in `ext/` (git-ignored), or its path in `$AM_EXT_DIRS`, builds it in
+  (`tools/ext.py`), and `AM_EXT=0 pio run` leaves every module out. PsiCast's
+  module is the `atom/` folder of a [psicast](https://github.com/danieledge/psicast)
+  checkout beside this one: `ln -s ../../psicast/atom ext/cast`. It can add settings (in `Settings2`'s
+  `ext[]` bytes), answer calls to `ATDT192.168.7.1:<port>`, listen on the
+  PPP link, add lines to `ATI` and `AT$STAT?`, and add web routes and status
+  rows, a page on the LCD (in the button's main ring, and over Home while
+  it has something to show) and a light on the LED, and say it shares the
+  radio with Bluetooth (Wi-Fi then keeps its modem sleep). Without one the
+  firmware is complete. A module's host tests use
+  `hosttest/sources.mk` and build their own `hostmodem` with it.
 - `make -C hosttest test` runs the unit tests on a PC (it needs zlib, and
   python3 with Pillow for the pictures).
   - `test_modem`: the AT parser, `+++` with guard times (too soon, too slow,
@@ -899,13 +975,16 @@ DCD on all the time.
     `ATZ`, a 1.x record, a shorter record), a walk of the schema (every
     setting answers `?` and takes `=`; bad values are `ERROR`), each new
     `AT$` command, TLS termination reaching the HAL as TLS, psiexec and
-    `AT$EXEC` against a fake helper, the uplink manager and config mode.
+    `AT$EXEC` against a fake helper, the uplink manager and config mode,
+    and a PPP call with no uplink (it connects, and lives through the
+    uplink coming and going).
   - `test_v22` (2.2, built with AddressSanitizer and UBSan): the WireGuard
     config parser (good configs, CR LF, comments, IPv6 skipped; 24 kinds of
     malformed, oversized and missing-field configs refused with a reason that
     never quotes a key; random garbage), Auto's decision, the split-tunnel
     routing rule, the DNS relay (forwarding, the ID mapping, retries,
-    timeouts, a full table, garbage both ways), the saved networks (choice,
+    timeouts, a full table, garbage both ways, the SERVFAIL answers with
+    no uplink), the saved networks (choice,
     fallback, pinning, migration from 2.1, limits, `AT$NETS?`/`$NET`/
     `$NETADD`/`$FORGET`), WireGuard through the modem (`AT$WGL`, `AT$WG`,
     `AT$STAT?`, Auto at home, the DNS relay's upstream), the line-setting
@@ -967,7 +1046,10 @@ DCD on all the time.
 - `hosttest/hostmodem --tcp 8080` is the web proxy alone on
   `127.0.0.1:8080`: each TCP connection is a `psiproxy` call. Point a browser,
   `curl -x`, or PsiWeb's ARM harness at it.
-- `python3 tools/emu/net.py proxy` (from the top of the repository) is the
+- `test_fwtrial`: a firmware update on trial and the way back (see
+  `docs/UPGRADE.md`), against a model of the bootloader's otadata.
+- `python3 core/tools/emu/net.py proxy` (from a PsiWeb checkout beside this
+  one, with this checkout's `hosttest/hostmodem`) is the
   end-to-end test in the Psion emulator. PsiWeb sets *Use a proxy* to
   `psiproxy`, 8080, and opens a real site (`EMU_PROXY_URL`, by default
   `news.ycombinator.com`) through the host modem. It needs the Internet.

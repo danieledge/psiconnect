@@ -24,6 +24,15 @@ bool Hal::UpConnect(const char* aHost, uint16_t aPort, bool aTls, char* aWhy, si
 	return true;
 	}
 
+void Hal::Random(uint8_t* aOut, size_t aLen)
+	{
+	for (size_t i = 0; i < aLen; i++)
+		aOut[i] = (uint8_t)(rand() >> 7);       // (the host tests; the Atom has esp_fill_random)
+	}
+
+void* Hal::BigAlloc(size_t aLen) { return malloc(aLen); }
+void Hal::BigFree(void* aP) { free(aP); }
+
 void Hal::MemInfo(char* aOut, size_t aMax)
 	{
 	if (aMax)
@@ -379,9 +388,9 @@ Modem::Modem(Hal& aHal, uint8_t* aRing, size_t aRingSize)
 	: iHal(aHal), iLineLen(0), iOnline(false), iConnected(false), iClosing(false), iWifiWasUp(false),
 	  iLastSerialMs(0), iPluses(0), iLastPlusMs(0), iToPsion(0), iToServer(0), iLastDataMs(0),
 	  iPendingBaud(0), iTrialFrom(0), iTrialStartMs(0), iTrialArmed(false), iTrialGen(0), iLed(-1), iProxy(aHal),
-	  iProxyCall(false), iPppCall(false), iExecCall(false), iExecOneShot(false), iTlsCall(false), iConfigMode(false),
+	  iProxyCall(false), iPppCall(false), iExecCall(false), iExtCount(0), iExtCall(0), iExtId(0), iExecOneShot(false), iTlsCall(false), iConfigMode(false),
 	  iConfigUntilMs(0), iLastTickMs(0), iJoinMs(0), iJoinFail(0), iWifiDownMs(0), iWifiRetryMs(0), iWifiRetries(0), iProbeDueMs(0), iLastWifiState(-1),
-	  iLastActive(-1), iNetSkip(0), iNetTrying(-1), iWgWant(EWgWantOff), iWgApplied(false), iWgGen(1), iWgAppliedGen(0),
+	  iLastActive(-1), iPppUplink(-1), iNetSkip(0), iNetTrying(-1), iWgWant(EWgWantOff), iWgApplied(false), iWgGen(1), iWgAppliedGen(0),
 	  iWgIp(0), iWgLastState(-1), iWgTickMs(0), iLastDnsOk(-1), iDnsUp(0), iWgTextLen(0), iWgTextBad(false), iPendingPins(false),
 	  iLineTrial(false), iLineArmed(false), iLineStartMs(0), iLineOldFlow(0), iLineOldFlowSwap(0), iLineOldSwap(0),
 	  iLineOldDcd(-1), iUpLen(0), iCap(0), iCapLen(0), iCapMax(0), iCapCut(false), iInResult(false), iRemote(false)
@@ -503,9 +512,10 @@ void Modem::Loop()
 		}
 	EscapeTick(iHal.Millis());
 	FlushUp();
+	iPpp.Poll(iHal);                         // (also frees a finished call's link that was still closing)
 	if (iPppCall)
 		{
-		iPpp.Poll(iHal);                     // PPP runs on the lwIP thread; notice a drop
+		// PPP runs on the lwIP thread; notice a drop
 		if (iPpp.Dropped())
 			{
 			iHal.Log("ppp: link dropped by the Psion (or lost) - hanging up");
@@ -558,6 +568,9 @@ void Modem::Loop()
 		if (iConfigMode && (int32_t)(now - iConfigUntilMs) >= 0)
 			ConfigMode(false);
 		}
+	// the extension modules follow their settings (AT$, the pages, ATZ, AT&F: whichever changed them)
+	for (int i = 0; i < iExtCount; i++)
+		iExt[i]->Apply(iS2);
 	UpdateDcd();
 	UpdateLed(now);
 	}
@@ -658,6 +671,18 @@ void Modem::NetTick(uint32_t aNow)
 		iLastActive = act;
 		iHal.Log(act == EActiveUsb ? "Uplink: USB" : act == EActiveWifi ? "Uplink: WiFi" : "Uplink: none");
 		}
+	// the PPP side follows the uplink: a call stays up without one (the
+	// modem's own services still work), and the outside world comes back
+	// with it, with no redial (NAT goes out of whichever uplink routes)
+	int up = iUplink.Up() ? 1 : 0;
+	if (up != iPppUplink)
+		{
+		if (iPppCall && iPppUplink >= 0)
+			iHal.Log(up ? "ppp: the uplink is back - the Psion reaches the outside world again"
+				: "ppp: no uplink - only the modem's own services until it comes back");
+		iPppUplink = up;
+		iHal.PppUplink(up != 0);
+		}
 	// the Internet check: not during a call (the line is busy, and a failed
 	// connect would say nothing new), soon while unconfirmed, rarely once passed
 	if (assoc && !iConnected && !iClosing && iS2.chkHost[0] && (int32_t)(aNow - iProbeDueMs) >= 0)
@@ -698,7 +723,11 @@ void Modem::SerialIn(uint8_t aC)
 void Modem::OnlineChar(uint8_t aC)
 	{
 	uint32_t now = iHal.Millis();
-	if (aC == iS.s2 && iS.s2 < 128)
+	// (an extension module's call: "+++" in the middle of one of the
+	// Psion's messages is data, whatever the pauses round it; the guard
+	// times apply as ever)
+	bool extData = iExtCall && iExtCall->CallHoldsEscape(iExtId);
+	if (aC == iS.s2 && iS.s2 < 128 && !extData)
 		{
 		if (iPluses == 0 && now - iLastSerialMs >= GuardMs())
 			{
@@ -758,6 +787,7 @@ void Modem::FlushUp()
 		}
 	size_t n = iPppCall ? iPpp.Input(iHal, iUpBuf, iUpLen)
 	         : iProxyCall ? iProxy.FromPsion(iUpBuf, iUpLen)
+	         : iExtCall ? iExtCall->CallIn(iExtId, iUpBuf, iUpLen)
 	         : iHal.TcpWrite(iUpBuf, iUpLen);
 	iToServer += n;
 	if (n)
@@ -1701,11 +1731,11 @@ Modem::TResult Modem::DialTo(const char* aArgs)
 				iHal.Log("ppp: dial ignored - PPP is off (AT$PPP=1 to enable)");
 				return RNoCarrier;           // PPP off: a phone number goes nowhere
 				}
+			// no uplink: the call comes up all the same, for the modem's own
+			// services on 192.168.7.1; the outside world fails at once (DNS
+			// answered here, connections refused) until the uplink is back
 			if (!iUplink.Up())
-				{
-				iHal.Log("ppp: dial failed - no uplink (WiFi/USB down)");
-				return RNoCarrier;
-				}
+				iHal.Log("ppp: no uplink - only the modem's own services until it comes back");
 			if (iConnected || iClosing)
 				{
 				iHal.Log("ppp: a call was still up at dial - hanging it up first");
@@ -1736,6 +1766,22 @@ Modem::TResult Modem::DialTo(const char* aArgs)
 			return RNone;
 			}
 		}
+	// "192.168.7.1:<port>", the modem's own address, on a port an extension
+	// module answers (ext.h): a call to it, here in the modem, needing no uplink
+	if (colon && strcmp(target, kPppLocalIp) == 0 && !tls)
+		for (int i = 0; i < iExtCount; i++)
+			if (iExt[i]->Answers((uint16_t)port))
+				{
+				char why[120];
+				why[0] = 0;
+				if (iExt[i]->CallRefused((uint16_t)port, why, sizeof(why)))
+					{
+					if (why[0])
+						iHal.Log(why);
+					return RNoCarrier;
+					}
+				return DialExt(*iExt[i], (uint16_t)port);
+				}
 	// "psiexec": the text channel to the helper on the LAN
 	if (StartsNoCase(target, "psiexec") && target[7] == 0)
 		return DialExec(0);
@@ -1883,14 +1929,53 @@ Modem::TResult Modem::DialExec(const char* aCommand)
 	return RNone;
 	}
 
+bool Modem::AddExtension(Extension& aExt)
+	{
+	if (iExtCount >= kMaxExt)
+		return false;
+	iExt[iExtCount++] = &aExt;
+	return true;
+	}
+
+// ATDT192.168.7.1:<port>: the call is an extension module's
+Modem::TResult Modem::DialExt(Extension& aExt, uint16_t aPort)
+	{
+	if (iConnected || iClosing)
+		Hangup(false);
+	uint32_t id = aExt.CallOpen(aPort);
+	if (!id)
+		return RNoCarrier;
+	iExtCall = &aExt;
+	iExtId = id;
+	iProxyCall = false;
+	iExecCall = false;
+	iExecOneShot = false;
+	iTlsCall = false;
+	iConnected = true;
+	iClosing = false;
+	iOnline = true;
+	iRing.Clear();
+	iUpLen = 0;
+	iPluses = 0;
+	ApplyPacing();
+	iLastSerialMs = iHal.Millis();
+	Result(RConnect);
+	UpdateDcd();
+	return RNone;
+	}
+
 void Modem::EndCall()
 	{
 	if (iPppCall)
 		iPpp.Stop(iHal);                     // (tears the PPP link down, NAT off)
 	else if (iProxyCall)
 		iProxy.Stop();                       // (closes its server connection)
+	else if (iExtCall)
+		iExtCall->CallClose(iExtId);
 	else
 		iHal.TcpClose();
+	iExtCall = 0;
+	iExtId = 0;
 	iProxyCall = false;
 	iPppCall = false;
 	iExecCall = false;
@@ -1979,6 +2064,19 @@ void Modem::Info()
 	iHal.MemInfo(w, sizeof(w));
 	if (w[0])
 		SayLine(w);
+	for (int i = 0; i < iExtCount; i++)
+		{
+		char c[100];
+		iExt[i]->StateText(c, sizeof(c));
+		snprintf(m, sizeof(m), "%s: %s", iExt[i]->Name(), c);
+		SayLine(m);
+		}
+	if (iHal.FirmwareInfo(m, sizeof(m)) && m[0])
+		{
+		char f[176];
+		snprintf(f, sizeof(f), "Firmware: %s", m);
+		SayLine(f);
+		}
 	}
 
 // AT&V: every setting (secrets as set/none)
@@ -2171,6 +2269,11 @@ Modem::TResult Modem::Join(const char* aArgs)
 //   WGEP         the endpoint (quoted host:port), when a config is set
 //   WGHS         seconds since the last handshake, -1 none
 //   WGRX, WGTX   bytes through the tunnel since it started
+// and then:
+//   ...          each extension module's own lines (ext.h)
+//   FW           OK; TRIAL (a firmware just written over the web, not yet
+//                seen to start properly); PREVIOUS (an update failed to start
+//                three times, and the modem went back to the firmware before it)
 void Modem::Status()
 	{
 	char m[200], q[140];
@@ -2263,6 +2366,19 @@ void Modem::Status()
 	snprintf(m, sizeof(m), "+STAT:WGRX=%lu", (unsigned long)iWgStatus.rx);
 	SayLine(m);
 	snprintf(m, sizeof(m), "+STAT:WGTX=%lu", (unsigned long)iWgStatus.tx);
+	SayLine(m);
+	// the extension modules' own lines
+	for (int i = 0; i < iExtCount; i++)
+		for (int k = 0; k < iExt[i]->StatCount(); k++)
+			{
+			char c[100];
+			iExt[i]->StatLine(k, c, sizeof(c));
+			snprintf(m, sizeof(m), "+STAT:%s", c);
+			SayLine(m);
+			}
+	static const char* const kFw[] = { "OK", "TRIAL", "PREVIOUS" };
+	int fw = iHal.FirmwareInfo(q, sizeof(q));
+	snprintf(m, sizeof(m), "+STAT:FW=%s", kFw[fw >= 0 && fw <= 2 ? fw : 0]);
 	SayLine(m);
 	}
 
@@ -2702,6 +2818,29 @@ void Modem::PumpServer(uint32_t aNow)
 			iProxyCall = false;
 			iConnected = false;
 			iClosing = true;
+			}
+		}
+	else if (iConnected && iExtCall)
+		{
+		// an extension module's bytes to the Psion into the ring, paced like
+		// any other call's; the call ends when the module is done with it
+		for (int i = 0; i < 4; i++)
+			{
+			size_t room = iRing.Free();
+			if (room < 64)
+				break;
+			size_t n = iExtCall->CallOut(iExtId, iTcpBuf, room < sizeof(iTcpBuf) ? room : sizeof(iTcpBuf));
+			if (!n)
+				break;
+			iRing.Put(iTcpBuf, n);
+			}
+		if (!iExtCall->CallAlive(iExtId))
+			{
+			iExtCall->CallClose(iExtId);
+			iExtCall = 0;
+			iExtId = 0;
+			iConnected = false;
+			iClosing = true;                     // (NO CARRIER once the last bytes are out)
 			}
 		}
 	else if (iConnected)

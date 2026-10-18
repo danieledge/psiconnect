@@ -15,7 +15,8 @@
 //   Pager       which page is shown: the gestures and the return to Home
 //
 // The pages (2.2): Home is the default and the one the screen goes back to.
-// A press steps round the short main ring Home -> Wi-Fi -> VPN -> Home. A
+// A press steps round the short main ring Home -> Wi-Fi -> VPN -> Home (with
+// an extension module's page after Home when it has one, ext.h). A
 // double-press is the page's one action: on Home it opens the Details
 // (setup, call, modes, mail, system, log), on Wi-Fi it joins the next saved
 // network, on VPN it changes the mode; in the Details a press is the next
@@ -39,13 +40,14 @@ static const int kScreenRows = 16;
 
 enum TScreenPage
 	{
-	// the main ring: a press steps through these
-	EPageHome = 0, EPageNetwork, EPageVpn,
+	// the main ring: a press steps through these (EPageExt, an extension
+	// module's page, comes after Home, and only when a module has one)
+	EPageHome = 0, EPageNetwork, EPageVpn, EPageExt,
 	// the Details: a double-press on Home opens them at Setup
 	EPageSetup, EPageCall, EPageModes, EPageMail, EPageSystem, EPageLog,
 	EPageCount
 	};
-static const int kMainPages = EPageSetup;                  // Home, Wi-Fi, VPN
+static const int kMainPages = EPageSetup;                  // Home, Wi-Fi, VPN, a module's
 static const int kDetailPages = EPageCount - EPageSetup;
 
 // the font family: FreeSans, drawn smooth at any size (canvas.h)
@@ -115,6 +117,7 @@ struct ScreenPage
 	int blocks;
 	char hint[32];                             // the gestures on this page
 	bool hintOn;                               // show the hint (just after a press), else the page dots
+	bool extPage;                              // a module's page is in the main ring (one more dot)
 	};
 
 // ----- the drawing ----------------------------------------------------------
@@ -126,7 +129,8 @@ enum TDrawOp
 	EOpBadge,           // a filled circle with a mark: x, y = centre; w = radius; h = TBadge
 	EOpLock,            // a padlock: x, y = centre; w = the size; h = 1 closed, 0 open
 	EOpDot,             // x, y = centre; w = radius
-	EOpIcon             // x, y = centre; w = the size; h = TIcon; font = its argument
+	EOpIcon,            // x, y = centre; w = the size; h = TIcon; font = its argument
+	EOpPicture          // the layout's picture (Layout::pic): x, y = its top left; w, h = its size
 	};
 enum TBadge { EBadgeCheck = 0, EBadgeCross, EBadgeDots, EBadgeDash, EBadgeInfo };
 struct DrawOp
@@ -144,6 +148,51 @@ struct Layout
 	DrawOp op[kDrawOps];
 	int n;
 	int dropped;                               // blocks that did not fit (the tests want none)
+	// at most one grey picture (an extension module's page, ExtPen::Picture):
+	// w x h bytes, 0 black .. 255 white, rows top down, owned by whoever laid
+	// the page out and kept until it is drawn. picGen changes when its pixels
+	// do, so two layouts still compare with memcmp
+	const uint8_t* pic;
+	uint32_t picGen;
+	};
+
+// An extension module's page on the LCD (ext.h: Extension::ScreenDraw) is
+// drawn with this: the status pages' own fonts (TFace, at any size: aSize is
+// the height of a capital in pixels), tones (TTone), icons (TIcon) and
+// measures, on kScreenPx x kScreenPx pixels from the top left, and one grey
+// picture. The page starts black. Text that does not fit in aMaxW is cut
+// with "..".
+class ExtPen
+	{
+public:
+	static const int kSize = kScreenPx;
+	static const int kText = 10;               // the pages' one text size
+	static const int kSmall = 8;               // the gestures' hint
+	static const int kMargin = 8;              // left and right
+	static const int kBandH = 22;              // the band at the top of a page
+	static const int kHomeBandH = 32;          // Home's band (and the Wi-Fi and VPN pages')
+	explicit ExtPen(Layout& aLayout) : iL(aLayout) {}
+	uint16_t Tone(int aTone) const;            // a TTone in RGB565, as the pages show it
+	void Fill(int aX, int aY, int aW, int aH, uint16_t aColour);
+	void Text(int aFace, int aSize, int aX, int aBase, uint16_t aColour, const char* aText, int aMaxW = kScreenPx);
+	void Right(int aFace, int aSize, int aRight, int aBase, uint16_t aColour, const char* aText, int aMaxW = kScreenPx);
+	void Centre(int aFace, int aSize, int aBase, uint16_t aColour, const char* aText);
+	int TextWidth(int aFace, int aSize, const char* aText) const;
+	// the largest size from aMax down to aMin at which aText is no wider than aW
+	int FitSize(int aFace, const char* aText, int aW, int aMax, int aMin) const;
+	void Dot(int aX, int aY, int aRadius, uint16_t aColour);
+	// a row icon (TIcon, with its argument as the pages use it), centred on (aX, aY)
+	void Icon(int aIcon, int aArg, int aX, int aY, uint16_t aColour);
+	// a box with rounded corners (fills and dots: the canvas's own primitives)
+	void RoundBox(int aX, int aY, int aW, int aH, int aRadius, uint16_t aColour);
+	// the page's one picture: aW x aH greys (0 black .. 255 white, rows top
+	// down) at (aX, aY). aGreys must stay put until the page is drawn; aGen
+	// must change whenever its pixels do (the page is compared, not the pixels)
+	void Picture(int aX, int aY, int aW, int aH, const uint8_t* aGreys, uint32_t aGen);
+	// steps that did not fit in the layout (the tests want none)
+	int Dropped() const { return iL.dropped; }
+private:
+	Layout& iL;
 	};
 
 class StatusModel
@@ -157,6 +206,8 @@ public:
 	// a message over the whole screen (the reset countdown, what a
 	// double-press chose): a grey line, a big one, a grey one
 	static void LayMessage(const char* aLine1, const char* aLine2, const char* aLine3, Layout& aOut);
+	// an extension module's own page (Extension::ScreenDraw), on black
+	static void LayExt(Extension& aExt, uint32_t aNowMs, Layout& aOut);
 	static int Pages() { return EPageCount; }
 	// "1.2K", "34M": a byte count in at most 5 characters
 	static void Count(uint32_t aBytes, char* aOut, size_t aMax);
@@ -186,13 +237,16 @@ public:
 	// the gestures' hint shows this long after a press
 	static const uint32_t kHintMs = 4000;
 
-	Pager() : iPage(EPageHome), iLastMs(0) {}
+	Pager() : iPage(EPageHome), iLastMs(0), iPressed(false), iExtPage(false) {}
+	// a module's page is in the main ring, after Home (ext.h: HasPage)
+	void SetExtPage(bool aOn) { iExtPage = aOn; if (!aOn && iPage == EPageExt) iPage = EPageHome; }
 	int Page() const { return iPage; }
 	bool InDetails() const { return iPage >= EPageSetup; }
 	// a press: the next page of the ring it is in
 	void Click(uint32_t aNowMs);
 	// a double-press: the page's action. Home opens the Details, the Details
-	// go back to Home (both ENothing); Wi-Fi and VPN ask the caller to act
+	// and a module's page go back to Home (ENothing); Wi-Fi and VPN ask the
+	// caller to act
 	TAction Double(uint32_t aNowMs);
 	// the hold turned config mode on (the Setup page, with the access point's
 	// name and password) or off (Home)
@@ -202,11 +256,18 @@ public:
 	bool Idle(uint32_t aNowMs, bool aKeep);
 	// the hint, just after a press (and just after start)
 	bool HintOn(uint32_t aNowMs) const { return aNowMs - iLastMs < kHintMs; }
-	void Show(int aPage, uint32_t aNowMs) { iPage = aPage; iLastMs = aNowMs; }
+	void Show(int aPage, uint32_t aNowMs) { iPage = aPage; iLastMs = aNowMs; iPressed = true; }
+	// an extension module's page may be shown over the pages now (ext.h:
+	// Extension::ScreenWanted): on Home, with no press for as long as a page
+	// stays before it goes back to Home. So a press shows the modem's pages
+	// again, for a while; the Setup page (config mode) always wins
+	bool Quiet(uint32_t aNowMs) const { return iPage == EPageHome && (!iPressed || aNowMs - iLastMs >= kHomeAfterMs); }
 
 private:
 	int iPage;
 	uint32_t iLastMs;               // the last press
+	bool iPressed;                  // (a press since start)
+	bool iExtPage;                  // the main ring has a module's page
 	};
 
 } // namespace am

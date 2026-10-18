@@ -14,9 +14,16 @@
 //   ./hostmodem --tcp PORT   is the proxy alone on 127.0.0.1:PORT: each TCP
 // connection is a psiproxy call (no AT commands, no pacing), for PsiWeb's
 // ARM harness (web/links/emu/run_links.py --proxy 127.0.0.1:PORT) or a PC.
+// Extension modules (../src/ext.h) built in by a module's own Makefile take
+// part as on the Atom (each module says whether it does in this run): calls
+// to ATDT192.168.7.1:<port> on the line, their loop with 127.0.0.1 standing
+// in for the PPP link's address, and their web routes on a small web server
+// on 127.0.0.1:5980 (HOSTMODEM_HTTP), with no password. HOSTMODEM_ANY=1
+// listens on every address instead (for a phone on the LAN).
 // MIT licence (see LICENSE at the top of the repository).
 #include "../src/modem.h"
 #include "../src/atremote.h"
+#include "../src/ext.h"
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <netdb.h>
@@ -436,6 +443,15 @@ public:
 		o.tx = (uint32_t)(ms / 20);
 		o.endpointIp = am::Ip4(203, 0, 113, 7);
 		}
+	std::string webInfo;                       // (the web server's address, when there is one)
+	void WebInfo(char* o, size_t m) override { snprintf(o, m, "%s", webInfo.c_str()); }
+	void Random(uint8_t* o, size_t n) override
+		{
+		FILE* f = fopen("/dev/urandom", "rb");
+		if (!f || fread(o, 1, n, f) != n)
+			am::Hal::Random(o, n);
+		if (f) fclose(f);
+		}
 	void Led(am::LedState s) override
 		{
 		static const char* const kNames[] = { "no WiFi", "WiFi up", "connected", "data", "connecting" };
@@ -516,6 +532,129 @@ struct AtPort
 			close(cli);
 			cli = -1;
 			session.Begin(aHal.Millis());
+			}
+		}
+	};
+
+// the extension modules' web routes, as the Atom's web UI serves them (but
+// with no password): one request a connection, then closed
+struct ExtHttp
+	{
+	int srv = -1;
+	struct Cli { int fd; std::string in; std::string out; size_t pos; };
+	std::vector<Cli> cli;
+	struct Query : am::ExtQuery
+		{
+		std::string q;
+		mutable std::string last;
+		const char* Arg(const char* aName) const override
+			{
+			last.clear();
+			std::string k = std::string(aName) + "=";
+			for (size_t at = 0; at < q.size(); )
+				{
+				size_t end = q.find('&', at);
+				if (end == std::string::npos) end = q.size();
+				if (q.compare(at, k.size(), k) == 0)
+					{
+					last = q.substr(at + k.size(), end - at - k.size());
+					break;
+					}
+				at = end + 1;
+				}
+			return last.c_str();
+			}
+		};
+	void Open(int aPort, bool aAny)
+		{
+		srv = socket(AF_INET, SOCK_STREAM, 0);
+		int one = 1;
+		setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+		sockaddr_in a = {};
+		a.sin_family = AF_INET;
+		a.sin_port = htons((uint16_t)aPort);
+		a.sin_addr.s_addr = htonl(aAny ? INADDR_ANY : INADDR_LOOPBACK);
+		if (bind(srv, (sockaddr*)&a, sizeof(a)) != 0 || listen(srv, 8) != 0)
+			{
+			perror("hostmodem: the web port");
+			close(srv);
+			srv = -1;
+			return;
+			}
+		fcntl(srv, F_SETFL, O_NONBLOCK);
+		fprintf(stderr, "hostmodem: the extension modules' pages at http://127.0.0.1:%d/\n", aPort);
+		}
+	static std::string Reply(int aCode, const char* aType, const std::string& aBody, const char* aCache, bool aGzip)
+		{
+		char h[320];
+		snprintf(h, sizeof(h), "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %zu\r\nCache-Control: %s\r\n%sConnection: close\r\n\r\n",
+			aCode, aCode == 200 ? "OK" : aCode == 403 ? "Forbidden" : "Not Found", aType, aBody.size(), aCache ? aCache : "no-store",
+			aGzip ? "Content-Encoding: gzip\r\n" : "");
+		return h + aBody;
+		}
+	std::string Answer(const std::string& aReq, am::Modem& aModem)
+		{
+		size_t sp = aReq.find(' '), sp2 = aReq.find(' ', sp + 1);
+		std::string path = sp2 != std::string::npos ? aReq.substr(sp + 1, sp2 - sp - 1) : "/";
+		size_t qm = path.find('?');
+		std::string base = path.substr(0, qm);
+		for (int i = 0; i < aModem.ExtensionCount(); i++)
+			{
+			am::Extension* x = aModem.ExtensionAt(i);
+			for (const am::ExtRoute* r = x->Routes(); r && r->path; r++)
+				if (base == r->path)
+					{
+					Query q;
+					if (qm != std::string::npos)
+						q.q = path.substr(qm + 1);
+					am::ExtReply rep;
+					x->Get(r->path, q, rep);
+					return Reply(rep.status, rep.type, std::string((const char*)rep.body, rep.len), rep.cache, rep.gzip);
+					}
+			}
+		return Reply(404, "text/plain", "Not found\n", 0, false);
+		}
+	void Serve(am::Modem& aModem)
+		{
+		if (srv < 0)
+			return;
+		int c = accept(srv, 0, 0);
+		if (c >= 0)
+			{
+			fcntl(c, F_SETFL, O_NONBLOCK);
+			cli.push_back({ c, "", "", 0 });
+			}
+		for (size_t i = 0; i < cli.size(); i++)
+			{
+			Cli& k = cli[i];
+			bool done = false;
+			if (k.out.empty())
+				{
+				char b[2048];
+				ssize_t n = recv(k.fd, b, sizeof(b), MSG_DONTWAIT);
+				if (n > 0)
+					k.in.append(b, (size_t)n);
+				else if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK))
+					done = true;
+				if (k.in.find("\r\n\r\n") != std::string::npos)
+					k.out = Answer(k.in, aModem);
+				}
+			if (!k.out.empty())
+				{
+				ssize_t w = send(k.fd, k.out.data() + k.pos, k.out.size() - k.pos, MSG_NOSIGNAL | MSG_DONTWAIT);
+				if (w > 0)
+					k.pos += (size_t)w;
+				else if (w < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
+					done = true;
+				if (k.pos >= k.out.size())
+					done = true;
+				}
+			if (done)
+				{
+				close(k.fd);
+				cli.erase(cli.begin() + i);
+				i--;
+				}
 			}
 		}
 	};
@@ -659,6 +798,21 @@ int main(int argc, char** argv)
 		hal.saved2.wgMode = am::EWgModeAuto;
 		hal.haveSaved2 = true;
 		}
+	// the extension modules built in (none in this directory's build)
+	static ExtHttp extHttp;
+	bool any = getenv("HOSTMODEM_ANY") != 0;
+	bool routes = false;
+	for (am::Extension* x = am::ExtModules(); x; x = x->iNextModule)
+		if (x->Begin(hal) && modem.AddExtension(*x) && x->Routes())
+			routes = true;
+	if (routes)
+		{
+		int httpPort = getenv("HOSTMODEM_HTTP") ? atoi(getenv("HOSTMODEM_HTTP")) : 5980;
+		char w[64];
+		snprintf(w, sizeof(w), "http://127.0.0.1:%d/", httpPort);
+		hal.webInfo = w;
+		extHttp.Open(httpPort, any);
+		}
 	modem.Begin();
 	static AtPort at;
 	if (getenv("HOSTMODEM_ATPORT"))
@@ -667,6 +821,9 @@ int main(int argc, char** argv)
 		{
 		modem.Loop();
 		at.Serve(modem, hal);
+		for (int i = 0; i < modem.ExtensionCount(); i++)
+			modem.ExtensionAt(i)->Loop(any ? "0.0.0.0" : "127.0.0.1", any ? "" : "127.0.0.1");
+		extHttp.Serve(modem);
 		pollfd p[2] = { { hal.ser, POLLIN, 0 }, { hal.tcp, POLLIN, 0 } };
 		poll(p, hal.tcp >= 0 ? 2 : 1, modem.Buffered() ? 0 : 1);
 		}

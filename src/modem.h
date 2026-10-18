@@ -32,6 +32,7 @@
 #include "wgconf.h"
 #include "netlist.h"
 #include "dnsrelay.h"
+#include "ext.h"
 
 namespace am {
 
@@ -179,6 +180,9 @@ public:
 	virtual bool WifiUp() = 0;
 	virtual void WifiBegin(const char* aSsid, const char* aPass) = 0;
 	virtual void WifiHardReset() {}            // a real radio down/up for the rejoin retry (no-op off-device)
+	// an extension module is using the radio for Bluetooth too (true while it
+	// does): Wi-Fi then keeps its modem sleep, which sharing the radio needs
+	virtual void RadioShared(bool aShared) { (void)aShared; }
 	virtual void WifiEnd() = 0;
 	virtual void WifiInfo(char* aOut, size_t aMax) = 0; // "SSID x, IP a.b.c.d, RSSI -60"
 	virtual int WifiScan(char aNames[][33], int aMax) { (void)aNames; (void)aMax; return 0; }
@@ -209,6 +213,11 @@ public:
 	virtual bool DnsRelayStart() { return false; }
 	virtual void DnsRelayStop() {}
 	virtual void DnsRelayUpstream(uint32_t aServer) { (void)aServer; }
+	// whether there is an uplink, told when it changes (and once at the
+	// start). With none, the PPP side gets its answers at once: the relay
+	// answers DNS itself, and connections to the outside are refused
+	// (board/pppoffline.h)
+	virtual void PppUplink(bool aUp) { (void)aUp; }
 	// the USB host (ESP32-S3): a TUsbState, and a few words (the device, its address)
 	virtual int UsbState(char* aDetail, size_t aMax) { if (aMax) aDetail[0] = 0; return EUsbNone; }
 	// settings
@@ -233,6 +242,17 @@ public:
 	virtual void ApplyUplink(const Settings2& aS2) { (void)aS2; } // (the USB host at the next restart)
 	virtual void ApInfo(char* aOut, size_t aMax) { if (aMax) aOut[0] = 0; }   // "PsiConnect-1A2B up, 192.168.4.1"
 	virtual void WebInfo(char* aOut, size_t aMax) { if (aMax) aOut[0] = 0; }  // "http://192.168.1.50/"
+	// the firmware trial (fwtrial.h): a TFwShow (0 all well, 1 a new firmware
+	// on trial, 2 running the previous one after an update failed), and a line
+	// for ATI ("" when all is well)
+	virtual int FirmwareInfo(char* aOut, size_t aMax) { if (aMax) aOut[0] = 0; return 0; }
+	// for extension modules (ext.h): random bytes (for tokens), and big
+	// buffers (PSRAM where there is some). BigRoom: could aLen more be taken
+	// now (by malloc) and still leave the heap enough for WiFi and TLS
+	virtual void Random(uint8_t* aOut, size_t aLen);
+	virtual void* BigAlloc(size_t aLen);
+	virtual void BigFree(void* aP);
+	virtual bool BigRoom(size_t aLen) { (void)aLen; return true; }
 private:
 	LogRing iLog;
 	bool iTlsVerify;
@@ -259,6 +279,14 @@ public:
 	bool ProxyCall() const { return iProxyCall; }
 	bool ExecCall() const { return iExecCall; }
 	bool PppCall() const { return iPppCall; }
+	// extension modules (ext.h), given by main.cpp (or a test): a dial to
+	// ATDT192.168.7.1:<port> that one answers is then a call to it, here
+	// in the modem. ExtCall: the module whose call is up (0: none)
+	static const int kMaxExt = 4;
+	bool AddExtension(Extension& aExt);
+	int ExtensionCount() const { return iExtCount; }
+	Extension* ExtensionAt(int aIndex) const { return iExt[aIndex]; }
+	Extension* ExtCall() const { return iExtCall; }
 	const PppLink& Ppp() const { return iPpp; }
 	bool Closing() const { return iClosing; }
 	int LedNow() const { return iLed; }             // the LED state last shown (the status screen's bar too)
@@ -328,6 +356,7 @@ private:
 	TResult Dial(const char* aArgs);
 	TResult DialTo(const char* aArgs);
 	TResult DialExec(const char* aCommand);
+	TResult DialExt(Extension& aExt, uint16_t aPort);
 	bool ExecHandshake(const char* aCommand);
 	TResult SetCommand(const char* aCmd, const char*& aP, bool& aHandled);
 	void Apply(TSchemaApply aWhat, uint32_t aOldBaud, bool aFromPsion = false);
@@ -399,6 +428,10 @@ private:
 	PppLink iPpp;                       // PPP-over-serial (a numeric dial, AT$PPP=1)
 	bool iPppCall;                      // the current call is a PPP link
 	bool iExecCall;                     // a psiexec call (a text channel to the helper)
+	Extension* iExt[kMaxExt];           // the extension modules taking part
+	int iExtCount;
+	Extension* iExtCall;                // the call is this module's (ATDT192.168.7.1:<port>)
+	uint32_t iExtId;
 	bool iExecOneShot;                  // ... from AT$EXEC=: ends with OK, not NO CARRIER
 	bool iTlsCall;                      // the call is TLS-terminated here
 	bool iConfigMode;
@@ -418,6 +451,7 @@ private:
 	uint32_t iProbeDueMs;
 	int iLastWifiState;
 	int iLastActive;
+	int iPppUplink;                     // the uplink as last told to PppUplink (-1 not yet)
 	void NetTick(uint32_t aNow);
 	// 2.2
 	NetList iNets;

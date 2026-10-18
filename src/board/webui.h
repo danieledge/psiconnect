@@ -30,6 +30,7 @@ public:
 	bool ApUp() const { return iApUp; }
 	const char* ApName() const { return iApName; }
 	const char* ApPass() const { return iApPass; }    // the access point's password (saved, or made at random)
+	bool OtaBusy() const { return iOtaBegun; }        // a firmware upload is being written
 
 private:
 	bool Allowed();                            // the password, or the access point
@@ -42,8 +43,10 @@ private:
 	void PageWifi();
 	void PageSettings();
 	void PageLog();
+	void PageCrash();
 	void ScreenBmp();                     // GET /screen.bmp: the LCD as drawn (AtomS3R)
 	void PageSystem();
+	void ExtGet(Extension& aExt, const ExtRoute& aRoute);   // an extension module's route (ext.h)
 	void PageVpn();
 	void PostWg();
 	void PostNet();
