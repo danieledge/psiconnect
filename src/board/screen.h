@@ -28,6 +28,9 @@ public:
 	void Message(const char* aLine1, const char* aLine2, const char* aLine3 = "");
 	// the same for a moment (what a double-press chose), then the page again
 	void Toast(uint32_t aNowMs, const char* aLine1, const char* aLine2, const char* aLine3 = "");
+	// what is running, at start-up: a toast for aForMs that leaves the backlight
+	// as it is (dim through the start, see Begin)
+	void Splash(uint32_t aNowMs, uint32_t aForMs, const char* aLine1, const char* aLine2, const char* aLine3);
 	// from loop(), after the web pages: draw what changed, about four times a second
 	void Tick(const Modem& aModem, Hal& aHal, uint32_t aNowMs);
 	// the gestures (main.cpp): see Pager in status.h

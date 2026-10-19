@@ -70,9 +70,13 @@ public:
 	// Which direction can take bytes right now, so the relay pump only reads a
 	// socket when the filter will actually consume (avoids a socket holdover).
 	bool WantsClient() const { return iState == EClientLine || iState == EFail; }
+	// (EClientLine too: between commands the server speaks first - its greeting
+	// at the start, a "+" for a client literal, untagged news - and that goes
+	// straight to the Psion. Not read then, the greeting waited for a command
+	// the Psion was never going to send before it: a deadlock)
 	bool WantsServer() const
 		{ return iState == EServerPass || iState == EServerCapture || iState == EFail
-		      || (iState == ETranscode && iInjSent); }
+		      || iState == EClientLine || (iState == ETranscode && iInjSent); }
 
 	// stats (for the log/tests)
 	uint32_t Transcoded() const { return iNImages; }   // image parts rewritten

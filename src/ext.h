@@ -80,6 +80,8 @@ public:
 	virtual ~Extension() {}
 	// its name: the settings group, the call's name, the label of its rows
 	virtual const char* Name() const = 0;
+	// its version ("0.17"), shown with the firmware's at start-up; empty if none
+	virtual const char* Version() const { return ""; }
 	// at start, before the web pages and the modem begin. False: it takes no
 	// part in this run (then nothing below is called)
 	virtual bool Begin(Hal& aHal) { (void)aHal; return true; }

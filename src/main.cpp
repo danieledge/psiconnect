@@ -257,7 +257,21 @@ void setup()
 	gModem->Begin();                          // (loads the settings; starts WiFi, the pages, the USB host)
 	gModem->SeedNetwork(AM_DEFAULT_SSID, AM_DEFAULT_PASS);   // (first start only; empty in a plain build)
 	gHal.Running();
+	// what is running, for a few seconds: the version, a module's and the build
+	char ver[24], mod[40] = "", built[32];
+	snprintf(ver, sizeof(ver), "PsiConnect %s", am::kVersion);
+	for (am::Extension* x = am::ExtModules(); x; x = x->iNextModule)
+		if (!mod[0] && x->Version()[0])
+			snprintf(mod, sizeof(mod), "%s %s", x->Name(), x->Version());
+	char stamp[24];
+	am::BuildStamp(stamp, sizeof(stamp));
+	snprintf(built, sizeof(built), "Built %s", stamp);
+#if defined(AM_HAS_LCD)
+	am::gScreen.Splash(millis(), 5000, ver, mod[0] ? mod : built, mod[0] ? built : "");
+#endif
 	char m[160];
+	snprintf(m, sizeof(m), "%s%s%s, built %s", ver, mod[0] ? ", " : "", mod, stamp);
+	gHal.Log(m);
 	snprintf(m, sizeof(m), "Modem, proxy and web pages: %u bytes; %u KB free, largest block %u KB; serial TX %d RX %d%s",
 		(unsigned)sizeof(am::Modem), (unsigned)(ESP.getFreeHeap() / 1024),
 		(unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) / 1024), gHal.PinTx(), gHal.PinRx(),

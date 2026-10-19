@@ -100,6 +100,19 @@ void Screen::Message(const char* aLine1, const char* aLine2, const char* aLine3)
 	iHaveShown = false;                         // the next Tick draws the page whole
 	}
 
+void Screen::Splash(uint32_t aNowMs, uint32_t aForMs, const char* aLine1, const char* aLine2, const char* aLine3)
+	{
+	if (!iReady)
+		return;
+	iLastActiveMs = aNowMs;
+	static Layout l;
+	StatusModel::LayMessage(aLine1, aLine2, aLine3, l);
+	Draw(l);
+	iToastUntilMs = aNowMs + aForMs;
+	if (!iToastUntilMs) iToastUntilMs = 1;
+	iHaveShown = false;
+	}
+
 void Screen::Toast(uint32_t aNowMs, const char* aLine1, const char* aLine2, const char* aLine3)
 	{
 	if (!iReady)
