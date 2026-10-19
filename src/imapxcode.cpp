@@ -475,7 +475,14 @@ size_t ImapXcode::PushServer(const uint8_t* aData, size_t aLen)
 			bool done = false; FrameByte(b, true, &done);
 			if (done) { if (iInjDrain) Fail("injected header too large"); else OnInjectDone(); }
 			}
-		else break;                                              // EClientLine / EServeCache: not expecting server bytes
+		else if (iState == EClientLine)
+			{
+			// between commands: the greeting, a "+" for a client literal or
+			// untagged news, straight to the Psion
+			if (iToPsionLen >= iToPsionCap) break;              // back-pressure
+			iToPsion[iToPsionLen++] = aData[i++];
+			}
+		else break;                                              // EServeCache: not expecting server bytes
 		if (iState == EFail) { i += append_upto(iToPsion, iToPsionLen, iToPsionCap, aData + i, aLen - i); break; }
 		}
 	return i;

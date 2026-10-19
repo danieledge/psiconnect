@@ -165,6 +165,28 @@ static void TestPassThroughText()
 	CHECK(H2.psion == structResp && H2.srvGot == structCmd);
 	}
 
+// ===== the server speaks first: the greeting, then a login ======================
+// (the filter waited for a client line before reading the server, and the
+// Psion waits for the greeting before it sends one: neither moved)
+static void TestGreetingFirst()
+	{
+	Harness H;
+	CHECK(H.Begin());
+	const std::string greet = "* OK IMAP4 ready\r\n";
+	H.feedServer(greet);
+	H.pump();
+	CHECK(H.psion == greet);                        // the greeting reached the Psion at once
+	H.server = [&](const std::string& c) -> std::string { return Tag(c) + " OK LOGIN completed\r\n"; };
+	std::string a = H.client("A001 LOGIN dan secret\r\n");
+	CHECK(a == "A001 OK LOGIN completed\r\n");
+	CHECK(H.srvGot == "A001 LOGIN dan secret\r\n");
+	// untagged news between commands goes straight through as well
+	H.feedServer("* 3 EXISTS\r\n");
+	H.pump();
+	CHECK(Has(H.psion, "* 3 EXISTS\r\n"));
+	CHECK(!H.x.PassThrough());
+	}
+
 // ===== a multipart/related message with a real embedded JPEG ====================
 
 static std::string gJpeg, gJb64;
@@ -348,6 +370,7 @@ static void TestFuzz()
 
 int main()
 	{
+	TestGreetingFirst();
 	gJpeg = ReadFile("pictures/photo.jpg");
 	if (gJpeg.empty())
 		{
