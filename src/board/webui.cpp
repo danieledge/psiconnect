@@ -722,9 +722,12 @@ void WebUi::PageSystem()
 	gFwSafe.Slots(t, sizeof(t));
 	Send("<p><small>Firmware: "); SendEsc(t); Send(".</small></p>");
 	}
+	char built[24];
+	BuildStamp(built, sizeof(built));
 	Send("<h2>About</h2><p>PsiConnect "); Send(kVersion); Send(" on the "); Send(kBoardName);
-	Send(". <a href=\"/api/settings\">Settings as JSON</a>. The firmware and its documentation are in the PsiTerm repository "
-		"(<code>firmware/atom-modem/docs/UPGRADE.md</code>).</p>");
+	Send(", built "); Send(built);
+	Send(". <a href=\"/api/settings\">Settings as JSON</a>. The firmware and its documentation are in the psiconnect repository "
+		"(<code>docs/UPGRADE.md</code>).</p>");
 	Tail();
 	}
 

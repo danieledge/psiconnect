@@ -6,7 +6,7 @@ FW ?= ..
 FW_IMG ?= $(FW)/core/mail/engine/img
 FW_SRC = $(FW)/src/modem.cpp $(FW)/src/settings.cpp $(FW)/src/schema.cpp $(FW)/src/ext.cpp $(FW)/src/uplink.cpp $(FW)/src/proxy.cpp \
       $(FW)/src/wgconf.cpp $(FW)/src/netlist.cpp $(FW)/src/dnsrelay.cpp $(FW)/src/atremote.cpp \
-      $(FW)/src/htmlsimp.cpp $(FW)/src/gzip.cpp $(FW)/src/imgconv.cpp $(FW)/src/ppp.cpp $(FW)/src/status.cpp $(FW)/src/canvas.cpp \
+      $(FW)/src/htmlsimp.cpp $(FW)/src/gzip.cpp $(FW)/src/imgconv.cpp $(FW)/src/ppp.cpp $(FW)/src/status.cpp $(FW)/src/buildstamp.cpp $(FW)/src/canvas.cpp \
       $(FW)/src/button.cpp $(FW)/src/usbnet/ncm.cpp $(FW)/src/usbnet/ipheth.cpp
 FW_HDR = $(FW)/src/canvas.h $(FW)/src/fontmetrics.h $(FW)/src/modem.h $(FW)/src/ext.h $(FW)/src/atremote.h $(FW)/src/wgconf.h \
       $(FW)/src/netlist.h $(FW)/src/dnsrelay.h $(FW)/src/status.h $(FW)/src/button.h $(FW)/src/ppp.h $(FW)/src/settings.h \
