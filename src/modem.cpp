@@ -488,7 +488,14 @@ void Modem::ApplyPacing()
 	{
 	if (iS.paceAuto)
 		AutoPacing(iS.baud, iS2.flow != 0, iS.paceRate, iS.paceBurst, iS.paceGap);
-	iPacer.Configure(iS.paceRate, iS.paceBurst, iS.paceGap);
+	// A PPP call goes unpaced: what can reach the Psion is already bounded by
+	// its own TCP windows, and the comms server drains the line without the
+	// pauses an app makes. Paced, a download used under half the line
+	// (10.4 KB/s at 230400); unpaced it uses about 95% of it (21.9 KB/s),
+	// with no errors, on a 5mx with no RTS/CTS. A rate set with AT$PR still
+	// applies (paceAuto off).
+	uint32_t rate = (iS.paceAuto && iPppCall) ? 0 : iS.paceRate;
+	iPacer.Configure(rate, iS.paceBurst, iS.paceGap);
 	}
 
 void Modem::Loop()
@@ -1981,6 +1988,7 @@ void Modem::EndCall()
 	iExecCall = false;
 	iTlsCall = false;
 	iConnected = false;
+	ApplyPacing();                           // (paced again once a PPP call is over)
 	}
 
 void Modem::Hangup(bool aSayNoCarrier)

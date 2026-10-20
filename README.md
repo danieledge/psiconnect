@@ -620,7 +620,7 @@ reached the Psion, or at once if the WiFi drops.
 | `AT$SCHEMA?` | (2.2) Every setting for a program: `+SCHEMA:<name>,<type>,<min>,<max>,<group>,<flags>,"<group name>","<label>"`. Types `BOOL`, `INT`, `ENUM:A|B|C`, `STR`, `SECRET`, `BAUD`, `PACE`, `PROXY`, `PORTS`, `PINS`; flags `L` a serial line setting, `R` at the next restart, `S` a secret. PsiConnect builds its settings pages from it |
 | `ATC1` / `ATC0` | WiFi232: joins / leaves the saved network |
 | `AT$SB=`n / `AT$SB?` | The serial baud (300 to 921600). It changes **after** the `OK`, which goes at the old speed. `ATB`n (Zimodem) is the same. A new speed is on trial: see the note below |
-| `AT$PR=`n / `AT$PR=AUTO` / `AT$PR?` | Pacing rate towards the Psion in bytes/s. `0` turns pacing off. `AUTO` (the default) chooses from the baud rate (see [Pacing in detail](#pacing-in-detail)) |
+| `AT$PR=`n / `AT$PR=AUTO` / `AT$PR?` | Pacing rate towards the Psion in bytes/s. `0` turns pacing off. `AUTO` (the default) chooses from the baud rate, and leaves Psion Internet calls unpaced (see [Pacing in detail](#pacing-in-detail)) |
 | `AT$PB=`n / `AT$PB?` | Pacing burst: bytes sent back to back (the token bucket's depth) |
 | `AT$PG=`n / `AT$PG?` | An extra gap after each burst, in ms (default 0) |
 | `AT$PACE?` | The pacing in force, and the buffer size |
@@ -723,6 +723,15 @@ Tuning:
 - A fast, reliable Psion (or a terminal program on a PC): `AT$PR=0` gives the
   full line rate.
 - Save with `AT&W`. `AT$PR=AUTO` goes back to the defaults.
+
+**Psion Internet calls are not paced** (2.6, with `AT$PR=AUTO`). On a PPP
+call the Psion's own TCP limits how much data can be on its way to it, and
+EPOC's comms server reads the line all through the call without the pauses
+an app makes, so the modem sends as fast as the line takes it. On a 5mx at
+230,400 bps with no RTS/CTS, a download went from 10.4 KB/s paced to
+21.9 KB/s, about 95% of the line, with no errors. A rate set with `AT$PR=`n
+still applies to every call, Psion Internet included, and pacing comes back
+when the call ends. Calls dialled as `ATDT host:port` are paced as before.
 
 Pacing cannot make up for an app that stops reading altogether for longer
 than the buffer lasts. Only RTS/CTS can do that, and this board has no wires
