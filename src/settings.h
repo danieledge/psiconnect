@@ -21,7 +21,7 @@
 
 namespace am {
 
-static const char* const kVersion = "2.5";
+static const char* const kVersion = "2.6";
 // when this firmware was built: "19 Oct 14:05" (buildstamp.cpp)
 void BuildStamp(char* aOut, size_t aMax);
 
