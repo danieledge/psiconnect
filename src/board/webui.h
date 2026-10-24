@@ -10,6 +10,7 @@
 #define ATOM_WEBUI_H
 
 #include <Arduino.h>
+#include <WiFi.h>
 #include <WebServer.h>
 #include <DNSServer.h>
 #include "../modem.h"
@@ -73,6 +74,22 @@ private:
 	uint32_t iLastScanMs;
 	bool iOtaAllowed;                          // the current upload passed auth
 	bool iOtaBegun;                            // Update.begin() succeeded for it
+	// a large reply sent a piece each pass of the loop, not all at once: a
+	// second's worth of WiFi held up the serial line, whose 4-16 KB buffer
+	// fills in under a second at 230400 with no flow control, and the
+	// Psion's PPP link failed (a 1.5 MB file did it). AT$WEBWHOLE=1: all
+	// at once, as before
+	void StreamTick();
+	struct TStream
+		{
+		WiFiClient client;                     // (the server has let go of it)
+		const uint8_t* at;                     // what is still to go
+		size_t left;
+		uint32_t ms;                           // when a piece last went
+		const char* path;                      // its route (a second request for it waits: 503)
+		};
+	static const int KStreams = 4;             // (a page's files come at once)
+	TStream iStreams[KStreams];
 	};
 
 } // namespace am

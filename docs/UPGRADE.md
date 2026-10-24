@@ -286,6 +286,7 @@ saved settings keeps `ppp=0`: on an updated board run `AT$PPP=1` then `AT&W`.
 | chkHost | 1.1.1.1:53 | `$CHK` | the Internet check's target; empty = no check |
 
 | wgMode (2.2) | 0 off | `$WG` | 0 off, 1 on, 2 auto. It was the first spare byte (offset 441), so an older record loads it as off |
+| webWhole | 0 (in pieces) | `$WEBPIECES` | ON (0): large web replies a few KB at a time; OFF (1): each at once. The spare byte after ext[] (offset 446), so an older record loads it as ON |
 
 2.2 adds two more records in the same namespace, each with a magic, a
 version and a length, loaded length-tolerantly:
@@ -363,6 +364,7 @@ power-off unless `AT&W` saves them.
 | `AT$SCHEMA?` | (2.2) Every setting, its type, range, group and flags, for a program (PsiConnect) |
 | (TCP 192.168.7.1:2323) | (2.2) AT commands over PPP for PsiConnect: while a PPP link is up, the same commands and answers over TCP from the PPP side (one client, no password, 120 s idle). Those that would end the link or change the serial line answer `+NOTVIAPPP: why` then `ERROR`; `ATZ` keeps the live link. See the README's *AT commands over PPP* |
 | `AT$LOGL=0/1/2` | How much is logged |
+| `AT$WEBPIECES=ON/OFF` | Large web replies in pieces (ON, the standard) or each at once |
 | `AT$RESET=YES` | Factory reset, both records, WiFi included; the modem restarts |
 
 `ATI` now adds the uplink in use, the USB port's mode and what is on it,

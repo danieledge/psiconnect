@@ -104,7 +104,9 @@ struct Settings2
 	                           // before 2.2, so an older record loads it as 0: off)
 	uint8_t ext[4];            // extension modules' settings (ext.h: each module's schema names its bytes); old
 	                           // spare bytes, so an older record loads them as 0
-	uint8_t spare[448 - 4 - 2 - 2 - 4 - 5 - 1 - 3 - 1 - 2 - 2 - 1 - 1 - 16 - 33 - 33 - 64 - 33 - 40 - 1 - 64 - 64 - 64 - 1 - 1 - 4];
+	uint8_t webWhole;          // AT$WEBPIECES=OFF: large web replies sent all at once, the loop held up
+	                           // meanwhile. 0 (the standard, and an older record's spare byte): in pieces
+	uint8_t spare[448 - 4 - 2 - 2 - 4 - 5 - 1 - 3 - 1 - 2 - 2 - 1 - 1 - 16 - 33 - 33 - 64 - 33 - 40 - 1 - 64 - 64 - 64 - 1 - 1 - 4 - 1];
 	};
 
 // built-in tripwires so the NVS layout cannot drift unnoticed: the
@@ -115,6 +117,7 @@ static_assert(sizeof(Settings2) == 448, "Settings2 must stay 448 bytes (NVS back
 static_assert(offsetof(Settings2, imapHost) == 248, "imapHost moved: a short record would load mail hosts onto the wrong bytes");
 static_assert(offsetof(Settings2, wgMode) == 441, "wgMode must be the first of the old spare bytes");
 static_assert(offsetof(Settings2, ext) == 442, "ext[] must start at the second of the old spare bytes");
+static_assert(offsetof(Settings2, webWhole) == 446, "webWhole must be the old spare byte after ext[]");
 
 // AT$WG: the WireGuard tunnel (wgtunnel.h)
 enum TWgMode { EWgModeOff = 0, EWgModeOn = 1, EWgModeAuto = 2 };

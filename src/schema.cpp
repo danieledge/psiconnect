@@ -11,6 +11,7 @@ namespace am {
 static const char* const kUplinkNames[] = { "AUTO", "WIFI", "USB", 0 };
 static const char* const kWebNames[] = { "OFF", "ON", "AP", 0 };
 static const char* const kWgNames[] = { "OFF", "ON", "AUTO", 0 };
+static const char* const kPiecesNames[] = { "ON", "OFF", 0 };   // (webWhole: 0 is in pieces)
 
 #define F1(field) SR1, (uint16_t)offsetof(Settings, field), (uint8_t)sizeof(((Settings*)0)->field)
 #define F2(field) SR2, (uint16_t)offsetof(Settings2, field), (uint8_t)sizeof(((Settings2*)0)->field)
@@ -59,6 +60,7 @@ static const SchemaEntry kSchema[] =
 	{ "WEB", STEnum, F2(web), 0, 2, kWebNames, SAWeb, SGSystem, "Web pages", "OFF; ON (an access point when unconfigured, pages on the network with a password); AP (the access point always)" },
 	{ "WEBPASS", STSecret, F2(webPass), 0, 32, 0, SAWeb, SGSystem, "Web password", "For the pages on the network (user atom). None: those pages are off" },
 	{ "APPASS", STSecret, F2(apPass), 8, 32, 0, SAWeb, SGSystem, "Access point password", "WPA2, 8 to 32 characters" },
+	{ "WEBPIECES", STEnum, F2(webWhole), 0, 1, kPiecesNames, SANone, SGSystem, "Large pages in pieces", "ON, the standard: a large page or file goes out a few KB at a time, the serial line looked after in between (sent at once, a big one held it up long enough for the Psion's link to fail at 230400 with no flow control). OFF: each sent at once" },
 	{ "LOGL", STInt, F2(logLevel), 0, 2, 0, SANone, SGSystem, "Log level", "0 quiet, 1 normal, 2 verbose" },
 	// WireGuard (2.2): the tunnel home. Its config is pasted on the web page (or AT$WGL)
 	{ "WG", STEnum, F2(wgMode), 0, 2, kWgNames, SAWg, SGWg, "WireGuard", "OFF; ON (always, when a config is set); AUTO (on unless the Atom is already on the home network). Only AllowedIPs go through it" },

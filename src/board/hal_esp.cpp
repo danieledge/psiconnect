@@ -110,7 +110,7 @@ void AtomHal::StartSerial()
 	// a big receive buffer (the Psion can send a burst while WiFi is busy),
 	// no transmit buffer: availableForWrite() is then the UART's own FIFO,
 	// so the pacing is not undone by a queue behind it
-	Serial2.setRxBufferSize(4096);
+	Serial2.setRxBufferSize(16384);                // (0.7 s at 230400: WiFi can hold the loop up)
 	Serial2.setTxBufferSize(0);
 	Serial2.begin(iBaud, SERIAL_8N1, iRx, iTx);
 	if (iFlow && iRts >= 0 && iCts >= 0)

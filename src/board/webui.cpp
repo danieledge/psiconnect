@@ -7,6 +7,14 @@
 #include <Update.h>
 #include <esp_core_dump.h>
 #include <esp_flash.h>
+#include <lwip/sockets.h>
+#if __has_include("webroutes_local.h")
+// a local build's own pages (git-ignored: kept out of the repository),
+// included twice: here for what they keep, in Begin for their routes
+#define WEB_LOCAL_STATE
+#include "webroutes_local.h"
+#undef WEB_LOCAL_STATE
+#endif
 #include "fwsafe.h"
 #if defined(AM_HAS_LCD)
 #include "screen.h"
@@ -32,6 +40,13 @@ WebUi::WebUi()
 	{
 	iApName[0] = 0;
 	iApPass[0] = 0;
+	for (int i = 0; i < KStreams; i++)
+		{
+		iStreams[i].at = 0;
+		iStreams[i].left = 0;
+		iStreams[i].ms = 0;
+		iStreams[i].path = 0;
+		}
 	}
 
 void WebUi::Begin(Modem& aModem, AtomHal& aHal)
@@ -109,6 +124,11 @@ void WebUi::Begin(Modem& aModem, AtomHal& aHal)
 				iOtaBegun = false;
 				}
 			});
+#if __has_include("webroutes_local.h")
+#define WEB_LOCAL_ROUTES
+#include "webroutes_local.h"
+#undef WEB_LOCAL_ROUTES
+#endif
 	iServer.onNotFound([this]() { NotFound(); });
 	}
 
@@ -178,6 +198,36 @@ void WebUi::Loop()
 		iDns.processNextRequest();
 	if (iStarted)
 		iServer.handleClient();
+	StreamTick();
+	}
+
+// at most a few KB a pass, and only what the socket takes now (MSG_DONTWAIT):
+// the modem's loop goes round between pieces
+void WebUi::StreamTick()
+	{
+	uint32_t now = millis();
+	for (int s = 0; s < KStreams; s++)
+		{
+		TStream& t = iStreams[s];
+		if (!t.left)
+			continue;
+		int fd = t.client.connected() ? t.client.fd() : -1;
+		for (int i = 0; fd >= 0 && i < 4 && t.left; i++)
+			{
+			int n = ::send(fd, t.at, t.left < 1436 ? t.left : 1436, MSG_DONTWAIT);
+			if (n <= 0)
+				break;                        // (EAGAIN: the socket is full; next pass)
+			t.at += n;
+			t.left -= n;
+			t.ms = now;
+			}
+		if (fd < 0 || !t.left || now - t.ms > 20000)
+			{
+			t.client = WiFiClient();          // (done, gone or stuck: the last copy, so the socket closes)
+			t.left = 0;
+			t.path = 0;
+			}
+		}
 	}
 
 void WebUi::ApInfo(char* aOut, size_t aMax) const
@@ -253,6 +303,23 @@ void WebUi::ExtGet(Extension& aExt, const ExtRoute& aRoute)
 	{
 	if (!aRoute.open && !Allowed())
 		return;
+	TStream* free = 0;
+	bool again = false;
+	for (int s = 0; s < KStreams; s++)
+		{
+		if (!iStreams[s].left)
+			free = &iStreams[s];
+		else if (iStreams[s].path == aRoute.path)
+			again = true;
+		}
+	if (again)
+		{
+		// (its last reply is still going, from a body the module may move
+		// on a second Get: later)
+		iServer.sendHeader("Retry-After", "2");
+		iServer.send(503, "text/plain", "Busy: try again\n");
+		return;
+		}
 	WebQuery q(iServer);
 	ExtReply r;
 	aExt.Get(aRoute.path, q, r);
@@ -260,6 +327,18 @@ void WebUi::ExtGet(Extension& aExt, const ExtRoute& aRoute)
 		iServer.sendHeader("Content-Encoding", "gzip");
 	if (r.cache)
 		iServer.sendHeader("Cache-Control", r.cache);
+	if (r.len > 8192 && free && !iS2.webWhole)   // (AT$WEBPIECES, ON as standard)
+		{
+		// (the head now, the body a piece each pass: StreamTick)
+		iServer.setContentLength(r.len);
+		iServer.send(r.status, r.type, "");
+		free->client = iServer.client();
+		free->at = r.body;
+		free->left = r.len;
+		free->ms = millis();
+		free->path = aRoute.path;
+		return;
+		}
 	iServer.send_P(r.status, r.type, (const char*)r.body, r.len);
 	}
 

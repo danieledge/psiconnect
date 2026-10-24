@@ -641,6 +641,7 @@ The full reference is in [`docs/UPGRADE.md`, section 6](docs/UPGRADE.md#6-at-com
 | `AT$USB=0/1` | The USB-C port: device (programming), or host (a phone or adapter), from the next restart |
 | `AT$FC=0/1`, `AT$FCSWAP=0/1`, `AT$PINS=tx,rx,rts,cts,dcd` | RTS/CTS in the UART hardware; the pins |
 | `AT$WEB=0/1/2`, `AT$WEBPASS=`, `AT$APPASS=`, `AT$AP?` | The web pages, their password, the access point |
+| `AT$WEBPIECES=ON/OFF` | Large pages and files sent a few KB at a time, with the serial line looked after in between (ON, the standard). Sent at once, a big one could hold the modem up long enough for the Psion's link to fail at 230400 with no flow control |
 | `AT$TLS=0/1`, `AT$TLSP=443,465,993,995`, `AT$TLSV=0/1`, `ATDT tls:host:port` | TLS termination |
 | `AT$PI=0/1`, `AT$PW=n`, `AT$PM=n` | Pictures to 16 greys through the proxy |
 | `AT$XE=0/1`, `AT$XH=host:port`, `AT$XK=token`, `AT$EXEC=cmd`, `ATDT psiexec` | Remote compute through `tools/psiexecd.py` |
