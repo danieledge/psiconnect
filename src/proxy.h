@@ -1,8 +1,10 @@
 // proxy.h - the Atom modem's built-in web proxy for PsiWeb. When the Psion
 // dials "psiproxy" (ATDT psiproxy:8080) the modem opens no TCP connection:
 // it answers CONNECT and is itself an HTTP proxy on the line. PsiWeb (with
-// Preferences > Use a proxy: psiproxy, 8080) sends it every request as plain
-// HTTP with an absolute address, https:// ones too. The proxy:
+// Connection settings > Network > Use proxy: psiproxy, 8080) sends it every
+// request as plain HTTP with an absolute address, https:// ones too. (With
+// AT$PU set and PsiProxy answering, the call goes to PsiProxy instead, and
+// this proxy takes no part: Modem::PsiProxyWorth.) The proxy:
 //   - fetches the page itself, over TLS for https:// (so the 36 MHz Psion
 //     does no TLS at all), following redirects;
 //   - unpacks gzip/deflate if a server sends it;
@@ -13,7 +15,9 @@
 //   - with AT$PI=1, turns pictures into small 16-grey GIFs (imgconv.h);
 //   - passes other files through unchanged;
 //   - keeps the call up between requests (keep-alive), so PsiWeb dials once
-//     for any number of pages and sites.
+//     for any number of pages and sites;
+//   - answers a request for one of PsiProxy's own services (a path starting
+//     "/_" on psiproxy or 192.168.7.1) with a 501 the apps recognise.
 // Its output goes into the modem's ring, which is paced to the Psion as
 // every other connection is; when the ring is nearly full the proxy stops
 // reading from the server, and TCP holds the server back.
@@ -66,6 +70,14 @@ public:
 	// the file is at most aImgMaxKB
 	void Start(int aMode, bool aZip, int aImgWidth = 0, int aImgMaxKB = 64);
 	void Stop();                         // the call has ended: close upstream
+	// PsiProxy on a computer (AT$PU), in a few words for the status page
+	// ("none set (AT$PU)", "192.168.1.20:8081, did not answer ...")
+	void Upstream(const char* aText);
+	// PsiProxy's own services (/_dist/, /_call/, /_apk/, /_putlog...): the
+	// built-in proxy answers a request for one with a 501 carrying this
+	// header and body, so an app can tell the user what is missing
+	static const char* const kNoPsiProxyHeader;   // "X-PsiConnect: no-psiproxy"
+	static const char* const kNoPsiProxyBody;
 	size_t FromPsion(const uint8_t* aData, size_t aLen);   // bytes taken
 	// moves things on; output goes into aOut. False once the call should
 	// end (the Psion asked for "Connection: close" and has its answer)
@@ -106,6 +118,7 @@ private:
 	void FlushChunk();
 	void ErrorPage(int aCode, const char* aWhat, const char* aDetail);
 	void StatusPage();
+	void NoPsiProxy();
 	void CloseUp();
 	bool GzipHeader(const uint8_t*& aP, size_t& aN, size_t& aUsed);
 	// pictures
@@ -152,6 +165,7 @@ private:
 	bool iUpClose;                       // the server said Connection: close
 	uint32_t iLastUpMs;
 	char iWhy[96];
+	char iUpstream[120];                 // Upstream()
 	// the response
 	uint8_t iIn[1460];
 	size_t iInPos, iInLen;

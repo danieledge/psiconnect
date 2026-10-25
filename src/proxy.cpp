@@ -25,6 +25,8 @@
 namespace am {
 
 const char* const Proxy::kName = "psiproxy";
+const char* const Proxy::kNoPsiProxyHeader = "X-PsiConnect: no-psiproxy";
+const char* const Proxy::kNoPsiProxyBody = "Needs PsiProxy on a computer: set it in the modem's Web proxy settings (AT$PU)";
 
 static const uint32_t kIdleMs = 30000;          // a server silent this long has gone
 static const int kMaxRedirects = 6;
@@ -205,6 +207,12 @@ Proxy::Proxy(Hal& aHal)
 	iUpHost[0] = 0;
 	iUrl[0] = 0;
 	iMethod[0] = 0;
+	snprintf(iUpstream, sizeof(iUpstream), "none set (AT$PU)");
+	}
+
+void Proxy::Upstream(const char* aText)
+	{
+	Copy(iUpstream, sizeof(iUpstream), aText, strlen(aText));
 	}
 
 void Proxy::Start(int aMode, bool aZip, int aImgWidth, int aImgMaxKB)
@@ -367,9 +375,10 @@ void Proxy::ErrorPage(int aCode, const char* aWhat, const char* aDetail)
 // http://psiproxy/: what the proxy is doing
 void Proxy::StatusPage()
 	{
-	char mem[96];
+	char mem[96], up[160];
 	iStatus = 200;
 	iHal.MemInfo(mem, sizeof(mem));
+	Esc(up, sizeof(up), iUpstream);
 	static const char* const kModes[] = { "off", "simplified pages", "text only", "unchanged pages (TLS only)", "reader" };
 	unsigned pct = iFetched ? (unsigned)((uint64_t)iSent * 100 / iFetched) : 0;
 	int bl = snprintf(iScratch, sizeof(iScratch),
@@ -377,9 +386,10 @@ void Proxy::StatusPage()
 		"<h2>PsiConnect %s: web proxy</h2>"
 		"<p>Mode: %s (AT$PX=%d)%s</p>"
 		"<p>Requests: %lu<br>From servers: %lu bytes<br>To the Psion: %lu bytes (%u%%)<br>Pictures converted: %lu</p>"
+		"<p>PsiProxy on a computer: %s</p>"
 		"<p>%s</p></body></html>",
 		kVersion, kModes[iMode >= 0 && iMode <= 4 ? iMode : 0], iMode, iImgWidth ? ", pictures to 16 greys" : "",
-		(unsigned long)iRequests, (unsigned long)iFetched, (unsigned long)iSent, pct, (unsigned long)iPictures, mem);
+		(unsigned long)iRequests, (unsigned long)iFetched, (unsigned long)iSent, pct, (unsigned long)iPictures, up, mem);
 	if (bl < 0 || bl >= (int)sizeof(iScratch))
 		bl = (int)strlen(iScratch);
 	char head[200];
@@ -389,6 +399,22 @@ void Proxy::StatusPage()
 	RawOut(head, (size_t)hl);
 	if (!EqNoCase(iMethod, "HEAD"))
 		RawOut(iScratch, (size_t)bl);
+	}
+
+// a request for one of PsiProxy's own services, which only PsiProxy on a
+// computer has: 501, with a header and a line an app can show
+void Proxy::NoPsiProxy()
+	{
+	iStatus = 501;
+	size_t bl = strlen(kNoPsiProxyBody);
+	char head[300];
+	int hl = snprintf(head, sizeof(head),
+		"HTTP/1.1 501 Not Implemented\r\n%s\r\nContent-Type: text/plain\r\nContent-Length: %u\r\n"
+		"Cache-Control: no-store\r\nConnection: %s\r\n\r\n",
+		kNoPsiProxyHeader, (unsigned)bl, iPsionClose ? "close" : "keep-alive");
+	RawOut(head, (size_t)hl);
+	if (!EqNoCase(iMethod, "HEAD"))
+		RawOut(kNoPsiProxyBody, bl);
 	}
 
 // ----- the request -----------------------------------------------------------
@@ -513,6 +539,86 @@ static long RequestLength(const char* aHead, size_t aLen)
 	return 0;
 	}
 
+// a header in a request head (not yet taken apart): there at all (aWord 0),
+// or with aWord in its value
+static bool HeadHas(const char* aHead, size_t aLen, const char* aName, const char* aWord)
+	{
+	size_t nl = strlen(aName);
+	for (size_t i = 0; i + nl < aLen; i++)
+		if ((i == 0 || aHead[i - 1] == '\n') && StartsNoCase(aHead + i, aName) && aHead[i + nl] == ':')
+			{
+			if (!aWord)
+				return true;
+			char v[64];
+			size_t b = i + nl + 1, n = 0;
+			while (b + n < aLen && aHead[b + n] != '\n' && n < sizeof(v) - 1)
+				{
+				v[n] = aHead[b + n];
+				n++;
+				}
+			v[n] = 0;
+			return ContainsNoCase(v, aWord);
+			}
+	return false;
+	}
+
+// the proxy's own names: psiproxy, and its address over PPP
+static bool OwnHost(const char* aHost, size_t aLen)
+	{
+	static const char* const kOwn[] = { Proxy::kName, kPppLocalIp, 0 };
+	for (int i = 0; kOwn[i]; i++)
+		{
+		size_t n = strlen(kOwn[i]);
+		if (aLen == n && StartsNoCase(aHost, kOwn[i]))
+			return true;
+		}
+	return false;
+	}
+
+// Is this request head (not yet taken apart) for one of PsiProxy's services:
+// a path starting "/_", asked of the proxy itself ("POST /_putlog" with Host
+// psiproxy, or "GET http://psiproxy/_dist/manifest")?
+static bool ServiceRequest(const char* aHead, size_t aLen)
+	{
+	const char* end = aHead + aLen;
+	const char* t = (const char*)memchr(aHead, ' ', aLen);
+	if (!t)
+		return false;
+	t++;
+	if (t + 2 > end)
+		return false;
+	if (t[0] == '/')
+		{
+		if (t[1] != '_')
+			return false;
+		// origin-form: the Host header says whose it is (none: ours)
+		for (const char* h = aHead; h + 5 < end; h++)
+			if ((h == aHead || h[-1] == '\n') && StartsNoCase(h, "host:"))
+				{
+				const char* v = SkipSpace(h + 5);
+				size_t n = 0;
+				while (v + n < end && v[n] != ':' && v[n] != '\r' && v[n] != '\n' && v[n] != ' ')
+					n++;
+				return OwnHost(v, n);
+				}
+		return true;
+		}
+	const char* h;
+	if (StartsNoCase(t, "http://")) h = t + 7;
+	else if (StartsNoCase(t, "https://")) h = t + 8;
+	else return false;
+	size_t n = 0;
+	while (h + n < end && h[n] != '/' && h[n] != ':' && h[n] != ' ' && h[n] != '?')
+		n++;
+	if (!OwnHost(h, n))
+		return false;
+	const char* p = h + n;
+	if (p < end && *p == ':')
+		while (p < end && *p != '/' && *p != ' ')
+			p++;
+	return p + 1 < end && p[0] == '/' && p[1] == '_';
+	}
+
 // A whole request in iReq? Take it apart: method, address, the headers
 // worth passing on, any body. False: not all here yet. True: iState is
 // SConnect (fetch it), or SIdle with the answer already given.
@@ -543,6 +649,25 @@ bool Proxy::TakeRequest()
 		return true;
 		}
 	long contentLength = RequestLength(iReq, headLen);
+	if (ServiceRequest(iReq, headLen))
+		{
+		// answered at once. A body is not read (a log can be big): the call
+		// ends after the answer, so nothing of it is taken for a request
+		const char* sp = strchr(iReq, ' ');
+		const char* te = sp ? sp + 1 + strcspn(sp + 1, " \r\n") : iReq;
+		Copy(iMethod, sizeof(iMethod), iReq, sp ? (size_t)(sp - iReq) : 0);
+		Copy(iUrl, sizeof(iUrl), sp ? sp + 1 : iReq, sp ? (size_t)(te - sp - 1) : 0);
+		bool body = contentLength != 0 || HeadHas(iReq, headLen, "transfer-encoding", 0);
+		iPsionClose = body || !StartsNoCase(te + (*te == ' '), "HTTP/1.1")
+			|| HeadHas(iReq, headLen, "connection", "close") || HeadHas(iReq, headLen, "proxy-connection", "close");
+		iReqUsed = iPsionClose ? iReqLen : headLen;
+		iRequests++;
+		iStartMs = iHal.Millis();
+		iFetched0 = iFetched;
+		iSent0 = iSent;
+		NoPsiProxy();
+		return true;
+		}
 	if (contentLength < 0 || headLen + (size_t)contentLength >= sizeof(iReq))
 		{
 		iPsionClose = true;

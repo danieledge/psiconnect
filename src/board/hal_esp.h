@@ -30,6 +30,7 @@ public:
 	size_t SerialWrite(const uint8_t* aData, size_t aLen) override;
 	void SerialBaud(uint32_t aBaud) override;
 	bool TcpConnect(const char* aHost, uint16_t aPort) override;
+	bool TcpConnectWithin(const char* aHost, uint16_t aPort, uint32_t aMs) override;
 	bool UpConnect(const char* aHost, uint16_t aPort, bool aTls, char* aWhy, size_t aWhyMax) override;
 	bool TcpOpen() override { return iCur->connected(); }
 	size_t TcpAvailable() override { int n = iCur->available(); return n > 0 ? n : 0; }
@@ -71,6 +72,8 @@ public:
 	bool SaveSettings(const am::Settings& aS) override;
 	bool LoadSettings2(am::Settings2& aS, size_t& aLength) override;
 	bool SaveSettings2(const am::Settings2& aS) override;
+	bool LoadSettings3(am::Settings3& aS, size_t& aLength) override;
+	bool SaveSettings3(const am::Settings3& aS) override;
 	void FactoryReset() override;
 	void Restart() override;
 	void Dcd(bool aOn) override;

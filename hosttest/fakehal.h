@@ -87,6 +87,17 @@ public:
 		tcpOpen = true;
 		return true;
 		}
+	// 2.7: the short connect to PsiProxy (AT$PU); withinOk false: it does not answer
+	bool withinOk = true;
+	int withinCalls = 0;
+	uint32_t withinMs = 0;
+	std::string withinHost; int withinPort = 0;
+	bool TcpConnectWithin(const char* h, uint16_t p, uint32_t ms) override
+		{
+		withinCalls++; withinMs = ms; withinHost = h; withinPort = p;
+		if (!withinOk) { tcpHost = h; tcpPort = p; return false; }
+		return TcpConnect(h, p);
+		}
 	bool TcpOpen() override { return tcpOpen; }
 	size_t TcpAvailable() override { return server.size(); }
 	size_t TcpRead(uint8_t* b, size_t m) override
@@ -177,7 +188,20 @@ public:
 		return true;
 		}
 	bool SaveSettings2(const am::Settings2& s) override { saved2 = s; haveSaved2 = true; saved2Len = sizeof(s); return true; }
-	void FactoryReset() override { reset = true; haveSaved = haveSaved2 = false; }
+	// the 2.7 record (a shorter saved3Len stands for an older firmware's)
+	bool haveSaved3 = false;
+	am::Settings3 saved3;
+	size_t saved3Len = 0;
+	int saves3 = 0;
+	bool LoadSettings3(am::Settings3& s, size_t& len) override
+		{
+		if (!haveSaved3) { len = 0; return false; }
+		len = saved3Len && saved3Len < sizeof(s) ? saved3Len : sizeof(s);
+		memcpy(&s, &saved3, len);
+		return true;
+		}
+	bool SaveSettings3(const am::Settings3& s) override { saved3 = s; haveSaved3 = true; saved3Len = sizeof(s); saves3++; return true; }
+	void FactoryReset() override { reset = true; haveSaved = haveSaved2 = haveSaved3 = false; }
 	int UsbState(char* d, size_t m) override { snprintf(d, m, "%s", usbDetail.c_str()); return usb; }
 	void ProbeInternet(const char* h, uint16_t p) override { probes++; probeHost = h; probePort = p; }
 	int Internet() override { return internet; }

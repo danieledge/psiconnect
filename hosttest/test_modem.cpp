@@ -65,7 +65,7 @@ static void TestBasics()
 	CHECK(Has(r.Got(), "ERROR"));
 	r.TypeRun("ATI\r");
 	g = r.Got();
-	CHECK(g.find("\r\nPsiConnect 2.6 (Psion-tuned)") == 0);     // the first line: the name
+	CHECK(g.find("\r\nPsiConnect 2.7 (Psion-tuned)") == 0);     // the first line: the name
 	CHECK(Has(g, "IP 192.168.1.50"));
 	CHECK(Has(g, "pacing 5500 bytes/s"));
 	CHECK(g.size() >= 6 && g.substr(g.size() - 6) == "\r\nOK\r\n");
@@ -1355,7 +1355,7 @@ static void TestStatusModel()
 		&& OnBlocks(p, "192.168.1.50"));
 	// the system page: version, board, uplink, memory
 	FillLay(r, am::EPageSystem, p);
-	CHECK(OnBlocks(p, "Version 2.6") && OnBlocks(p, "FakeBoard") && OnBlocks(p, "Uplink Wi-Fi"));
+	CHECK(OnBlocks(p, "Version 2.7") && OnBlocks(p, "FakeBoard") && OnBlocks(p, "Uplink Wi-Fi"));
 	// the log page: the newest line at the bottom, wrapped to the width
 	r.hal.Log("a log line that is longer than the screen is wide, for sure");
 	r.hal.Log("last line");
@@ -1726,7 +1726,7 @@ static void TestWifiFromPsion()
 	r.Run(50);
 	r.TypeRun("AT$STAT?\r", 100);
 	g = r.Got();
-	CHECK(Has(g, "\r\n+STAT:VER=2.6\r\n") && Has(g, "+STAT:BOARD=FakeBoard") && Has(g, "+STAT:SSID=\"Home\"")
+	CHECK(Has(g, "\r\n+STAT:VER=2.7\r\n") && Has(g, "+STAT:BOARD=FakeBoard") && Has(g, "+STAT:SSID=\"Home\"")
 		&& Has(g, "+STAT:WIFI=INTERNET") && Has(g, "+STAT:CUR=\"Home\"") && Has(g, "+STAT:IP=192.168.1.50")
 		&& Has(g, "+STAT:RSSI=-60") && Has(g, "+STAT:NET=1") && Has(g, "+STAT:FAIL=NONE") && Has(g, "+STAT:UP=WIFI")
 		&& Has(g, "+STAT:CALL=0") && Has(g, "+STAT:BAUD=115200") && Has(g, "+STAT:FC=0") && Has(g, "+STAT:CHK=\""));
@@ -1800,6 +1800,188 @@ static void TestWifiFromPsion()
 	CHECK(r.Got() == "\r\nOK\r\n" && r.hal.wifiSsid == "a/b");
 	}
 
+// ===== 2.7: PsiProxy on a computer (AT$PU) =========================================
+
+static_assert(sizeof(am::Settings3) == 256, "the 2.7 NVS record keeps its size (new fields take spare bytes)");
+
+// the 2.7 record and AT$PU: parse, print, AT&W, ATZ, AT&F, an older or newer record
+static void TestSettings3()
+	{
+	Rig r;
+	const am::Settings3& s3 = r.modem->Config3();
+	CHECK(s3.magic == am::kMagic3 && s3.version == am::kSettings3Version && s3.length == 256 && s3.psiProxy[0] == 0);
+	r.TypeRun("ATE0\r"); r.Got();
+	r.TypeRun("AT$PU?\r");
+	CHECK(r.Got() == "\r\n\r\nOK\r\n");                           // (empty: none)
+	char h[64];
+	uint16_t port = 0;
+	CHECK(!am::PsiProxyAddr(s3, h, sizeof(h), port));
+	r.TypeRun("AT$PU=192.168.1.20\r");
+	CHECK(r.Got() == "\r\nOK\r\n" && strcmp(s3.psiProxy, "192.168.1.20") == 0);
+	CHECK(am::PsiProxyAddr(s3, h, sizeof(h), port) && strcmp(h, "192.168.1.20") == 0 && port == 8081);
+	r.TypeRun("AT$PU=pc-1.lan:9000\r");
+	CHECK(r.Got() == "\r\nOK\r\n" && am::PsiProxyAddr(s3, h, sizeof(h), port) && strcmp(h, "pc-1.lan") == 0 && port == 9000);
+	// not a host:port: refused, the value kept
+	static const char* const kBad[] = { "pc lan", "pc:0", "pc:70000", ":8081", "pc:", "pc:80x", "a/b", "pc:8081:1",
+		"http://pc:8081", "0123456789012345678901234567890123456789012345678901234567890123456789", 0 };
+	for (int i = 0; kBad[i]; i++)
+		{
+		r.TypeRun((std::string("AT$PU=") + kBad[i] + "\r").c_str());
+		CHECK(Has(r.Got(), "ERROR") && strcmp(s3.psiProxy, "pc-1.lan:9000") == 0);
+		}
+	r.TypeRun("AT$PU?\r");
+	CHECK(Has(r.Got(), "\r\npc-1.lan:9000\r\n"));
+	r.TypeRun("AT&V\r", 200);
+	CHECK(Has(r.Got(), "$PU=pc-1.lan:9000"));
+	r.TypeRun("AT$HELP\r", 300);
+	CHECK(Has(r.Got(), "$PU=... (pc-1.lan:9000): host:port of PsiProxy"));
+	r.TypeRun("AT$SCHEMA?\r", 300);
+	CHECK(Has(r.Got(), "+SCHEMA:PU,STR,0,63,3,,\"Web proxy\",\"PsiProxy\""));
+	CHECK(strcmp(am::SchemaWebPage(*am::SchemaFind("PU")), "/settings") == 0);
+	// AT&W saves it in cfg3; cfg2 keeps its size
+	r.TypeRun("AT&W\r");
+	CHECK(r.hal.haveSaved3 && strcmp(r.hal.saved3.psiProxy, "pc-1.lan:9000") == 0 && r.hal.saved3.magic == am::kMagic3);
+	CHECK(r.hal.saved2Len == 448 && r.hal.saved3Len == 256);
+	r.Got();
+	r.TypeRun("AT$PU=\r");                                       // empty: none
+	CHECK(r.Got() == "\r\nOK\r\n" && s3.psiProxy[0] == 0);
+	r.TypeRun("ATZ\r");
+	CHECK(strcmp(s3.psiProxy, "pc-1.lan:9000") == 0);            // the saved one back
+	r.TypeRun("AT&F\r");
+	CHECK(s3.psiProxy[0] == 0 && s3.magic == am::kMagic3);       // factory: none
+	r.TypeRun("ATZ\r");
+	CHECK(strcmp(s3.psiProxy, "pc-1.lan:9000") == 0);
+	r.TypeRun("AT$RESET=YES\r");
+	CHECK(r.hal.reset && s3.psiProxy[0] == 0);
+	// an older firmware's modem (no cfg3): the factory value
+	{
+	Rig r1;
+	r1.hal.haveSaved2 = true; am::FactoryDefaults2(r1.hal.saved2); r1.hal.saved2.flow = 1;
+	r1.modem->Begin();
+	CHECK(r1.modem->Config2().flow == 1 && r1.modem->Config3().psiProxy[0] == 0 && r1.modem->Config3().magic == am::kMagic3);
+	}
+	// a short record (one without the field): the field at its factory value
+	{
+	Rig r2;
+	am::FactoryDefaults3(r2.hal.saved3);
+	strcpy(r2.hal.saved3.psiProxy, "pc:1");
+	r2.hal.saved3.length = 8;
+	r2.hal.saved3Len = 8;
+	r2.hal.haveSaved3 = true;
+	r2.modem->Begin();
+	CHECK(r2.modem->Config3().psiProxy[0] == 0 && r2.modem->Config3().length == 256);
+	// whole: kept
+	r2.hal.saved3.length = 256; r2.hal.saved3Len = 0;
+	r2.modem->Begin();
+	CHECK(strcmp(r2.modem->Config3().psiProxy, "pc:1") == 0);
+	// the wrong magic: not a record
+	r2.hal.saved3.magic = 0x12345678;
+	r2.modem->Begin();
+	CHECK(r2.modem->Config3().psiProxy[0] == 0);
+	}
+	// AcceptSettings3: a newer firmware's longer record (cut to ours by the board) loads; an unended string ends
+	{
+	am::Settings3 x;
+	am::FactoryDefaults3(x);
+	strcpy(x.psiProxy, "pc:2");
+	x.length = 400;
+	x.spare[0] = 7;
+	CHECK(am::AcceptSettings3(x, sizeof(x)) && strcmp(x.psiProxy, "pc:2") == 0 && x.length == 256 && x.spare[0] == 7);
+	memset(x.psiProxy, 'a', sizeof(x.psiProxy));
+	CHECK(am::AcceptSettings3(x, sizeof(x)) && strlen(x.psiProxy) == sizeof(x.psiProxy) - 1);
+	CHECK(!am::AcceptSettings3(x, 4));
+	x.version = 0;
+	CHECK(!am::AcceptSettings3(x, sizeof(x)));
+	}
+	}
+
+// a call to psiproxy goes to PsiProxy when it answers, else to the built-in proxy
+static void TestPsiProxyDial()
+	{
+	Rig r;
+	auto hangUp = [&]() { r.Run(1100); r.TypeRun("+++", 1100); r.TypeRun("ATH\r", 300); r.Got(); };
+	r.TypeRun("ATE0\r"); r.Got();
+	// none set: the built-in proxy, nothing tried
+	r.TypeRun("ATDT psiproxy:8080\r", 100);
+	CHECK(Has(r.Got(), "CONNECT") && r.modem->ProxyCall() && !r.modem->PsiProxyCall() && r.hal.withinCalls == 0);
+	hangUp();
+	r.TypeRun("ATI\r", 200);
+	CHECK(Has(r.Got(), "PsiProxy: none set (AT$PU)"));
+	r.TypeRun("AT$STAT?\r", 200);
+	std::string g = r.Got();
+	CHECK(Has(g, "+STAT:PU=\"\"\r\n") && Has(g, "+STAT:PUOK=-1\r\n"));
+	// set, and answering: a plain TCP call to it, on its own port (the dialled one is not used)
+	r.TypeRun("AT$PU=192.168.1.20\r");
+	r.TypeRun("ATI\r", 200);
+	CHECK(Has(r.Got(), "PsiProxy: 192.168.1.20:8081, not tried yet"));
+	r.TypeRun("ATDT psiproxy:3128\r", 100);
+	CHECK(Has(r.Got(), "CONNECT") && !r.modem->ProxyCall() && r.modem->PsiProxyCall() && r.modem->Connected());
+	CHECK(r.hal.withinCalls == 1 && r.hal.withinHost == "192.168.1.20" && r.hal.withinPort == 8081 && r.hal.withinMs == 2500);
+	CHECK(r.hal.tcpOpen && r.hal.upConnects == 0 && r.hal.Logged("proxy: psiproxy -> PsiProxy at 192.168.1.20:8081"));
+	CHECK(r.modem->PsiProxyLast() == 1);
+	// the bytes pass as they are, both ways
+	r.TypeRun("GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n", 200);
+	CHECK(r.hal.toServer == "GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n");
+	r.Feed("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi");
+	r.Run(200);
+	CHECK(r.Got() == "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi");
+	hangUp();
+	CHECK(!r.modem->Connected() && !r.modem->PsiProxyCall() && !r.hal.tcpOpen);
+	r.TypeRun("ATI\r", 200);
+	CHECK(Has(r.Got(), "PsiProxy: 192.168.1.20:8081, answered at the last try"));
+	r.TypeRun("AT$STAT?\r", 200);
+	g = r.Got();
+	CHECK(Has(g, "+STAT:PU=\"192.168.1.20\"\r\n") && Has(g, "+STAT:PUOK=1\r\n"));
+	// not answering: the built-in proxy, which says so on its page
+	r.hal.withinOk = false;
+	r.TypeRun("ATDT psiproxy:8080\r", 100);
+	CHECK(Has(r.Got(), "CONNECT") && r.modem->ProxyCall() && !r.modem->PsiProxyCall() && r.hal.withinCalls == 2);
+	CHECK(r.hal.Logged("proxy: PsiProxy at 192.168.1.20:8081 did not answer in 2.5 s") && r.modem->PsiProxyLast() == 0);
+	r.TypeRun("GET http://psiproxy/ HTTP/1.1\r\nHost: psiproxy\r\n\r\n", 300);
+	g = r.Got();
+	CHECK(Has(g, "HTTP/1.1 200 OK") && Has(g, "PsiProxy on a computer: 192.168.1.20:8081, did not answer at the last try"));
+	hangUp();
+	r.TypeRun("AT$STAT?\r", 200);
+	CHECK(Has(r.Got(), "+STAT:PUOK=0\r\n"));
+	// ... and not tried again for a minute (no 2.5 s wait each call)
+	r.TypeRun("ATDT psiproxy:8080\r", 100);
+	CHECK(Has(r.Got(), "CONNECT") && r.modem->ProxyCall() && r.hal.withinCalls == 2);
+	hangUp();
+	r.hal.Advance(61ull * 1000 * 1000);
+	r.Run(10);
+	r.hal.withinOk = true;
+	r.TypeRun("ATDT psiproxy:8080\r", 100);
+	CHECK(Has(r.Got(), "CONNECT") && r.modem->PsiProxyCall() && r.hal.withinCalls == 3);
+	hangUp();
+	// a new AT$PU forgets the failure
+	r.hal.withinOk = false;
+	r.TypeRun("ATDT psiproxy:8080\r", 100);
+	CHECK(r.modem->ProxyCall() && r.hal.withinCalls == 4);
+	hangUp();
+	r.TypeRun("AT$PU=192.168.1.21:8081\r");
+	r.TypeRun("ATDT psiproxy:8080\r", 100);
+	CHECK(r.modem->ProxyCall() && r.hal.withinCalls == 5 && r.hal.withinHost == "192.168.1.21");
+	hangUp();
+	r.TypeRun("ATDT psiproxy:8080\r", 100);
+	CHECK(r.modem->ProxyCall() && r.hal.withinCalls == 5);
+	hangUp();
+	// ... and so does another network (the uplink's address changed)
+	r.hal.upIp = am::Ip4(172, 20, 10, 2); r.hal.upMask = am::Ip4(255, 255, 255, 240);
+	r.TypeRun("ATDT psiproxy:8080\r", 100);
+	CHECK(r.modem->ProxyCall() && r.hal.withinCalls == 6);
+	hangUp();
+	// other dials never try it
+	r.TypeRun("ATDT bbs.example.org:23\r", 100);
+	CHECK(Has(r.Got(), "CONNECT") && r.hal.withinCalls == 6 && r.hal.tcpHost == "bbs.example.org");
+	hangUp();
+	// with the built-in proxy off (AT$PX=0) and PsiProxy not answering, the dial is to the name, as before
+	r.TypeRun("AT$PX=0\r");
+	r.hal.Advance(61ull * 1000 * 1000);
+	r.Run(10);
+	r.TypeRun("ATDT psiproxy:8080\r", 100);
+	CHECK(r.hal.withinCalls == 7 && !r.modem->ProxyCall() && r.hal.tcpHost == "psiproxy");
+	}
+
 int main()
 	{
 	printf("basics\n");   TestBasics();
@@ -1828,6 +2010,8 @@ int main()
 	printf("factory keeps link\n"); TestFactoryKeepsLink();
 	printf("ppp dns\n");  TestPppDns();
 	printf("wifi from the psion\n"); TestWifiFromPsion();
+	printf("settings 2.7\n"); TestSettings3();
+	printf("psiproxy pass-through\n"); TestPsiProxyDial();
 	printf("%d checks, %d failed\n", gChecks, gFails);
 	return gFails ? 1 : 0;
 	}

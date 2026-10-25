@@ -15,6 +15,7 @@ static const char* const kPiecesNames[] = { "ON", "OFF", 0 };   // (webWhole: 0 
 
 #define F1(field) SR1, (uint16_t)offsetof(Settings, field), (uint8_t)sizeof(((Settings*)0)->field)
 #define F2(field) SR2, (uint16_t)offsetof(Settings2, field), (uint8_t)sizeof(((Settings2*)0)->field)
+#define F3(field) SR3, (uint16_t)offsetof(Settings3, field), (uint8_t)sizeof(((Settings3*)0)->field)
 
 static const SchemaEntry kSchema[] =
 	{
@@ -39,6 +40,7 @@ static const SchemaEntry kSchema[] =
 	// the web proxy
 	{ "PX", STProxyMode, F1(proxy), 0, 4, 0, SANone, SGProxy, "Web proxy", "0 off, 1 simplified pages, 2 text only, 3 pages unchanged (TLS only), 4 reader" },
 	{ "PZ", STBoolInv, F1(proxyNoZip), 0, 1, 0, SANone, SGProxy, "Gzip pages", "1: the proxy gzips pages for the line" },
+	{ "PU", STHostPort, F3(psiProxy), 0, 63, 0, SAPsiProxy, SGProxy, "PsiProxy", "host:port of PsiProxy on a computer on your network (port 8081 if left out). When it answers, a call to psiproxy goes straight to it (full page slimming, every picture format, PsiInstall, PsiCall, PsiLinux packages, Send log); otherwise the modem's own proxy does the pages. Empty: the modem's own proxy always" },
 	// TLS termination
 	{ "TLS", STBool, F2(tls), 0, 1, 0, SANone, SGTls, "TLS termination", "1: a dial to one of the ports below is made over TLS by the modem; the Psion sees the plain protocol" },
 	{ "TLSP", STPorts, F2(tlsPorts), 0, 0, 0, SANone, SGTls, "TLS ports", "The ports it applies to, e.g. 443,465,993,995" },
@@ -123,7 +125,11 @@ bool ValidBaud(long aB)
 
 static void* Field(const Config& aC, const SchemaEntry& aE)
 	{
-	return aE.rec == SR1 ? (void*)((uint8_t*)&aC.s + aE.offset) : (void*)((uint8_t*)&aC.s2 + aE.offset);
+	if (aE.rec == SR1)
+		return (void*)((uint8_t*)&aC.s + aE.offset);
+	if (aE.rec == SR2)
+		return (void*)((uint8_t*)&aC.s2 + aE.offset);
+	return (void*)((uint8_t*)&aC.s3 + aE.offset);
 	}
 
 static long GetNumber(const Config& aC, const SchemaEntry& aE)
@@ -177,7 +183,7 @@ void SchemaGet(const Config& aC, const SchemaEntry& aE, char* aOut, size_t aMax)
 	case STProxyMode:
 		snprintf(aOut, aMax, "%d", ProxyMode(aC.s));
 		break;
-	case STStr:
+	case STStr: case STHostPort:
 		snprintf(aOut, aMax, "%s", (const char*)Field(aC, aE));
 		break;
 	case STSecret:
@@ -270,6 +276,23 @@ bool SchemaSet(Config& aC, const SchemaEntry& aE, const char* aValue)
 		f[n] = 0;
 		return true;
 		}
+	case STHostPort:
+		{
+		while (*aValue == ' ') aValue++;
+		size_t n = strlen(aValue);
+		while (n && aValue[n - 1] == ' ') n--;
+		char v[80], host[64];
+		uint16_t port;
+		if (n >= aE.size || n >= sizeof(v) || (long)n > aE.max)
+			return false;
+		memcpy(v, aValue, n);
+		v[n] = 0;
+		if (n && !ParseHostPort(v, host, sizeof(host), port, kPsiProxyPort))
+			return false;
+		char* f = (char*)Field(aC, aE);
+		memcpy(f, v, n + 1);
+		return true;
+		}
 	case STPorts:
 		return SetTlsPorts(aC.s2, aValue);
 	case STPins:
@@ -309,7 +332,7 @@ void SchemaTypeText(const SchemaEntry& aE, char* aOut, size_t aMax)
 	case STBaud: snprintf(aOut, aMax, "BAUD"); break;
 	case STPace: snprintf(aOut, aMax, "PACE"); break;
 	case STProxyMode: snprintf(aOut, aMax, "PROXY"); break;
-	case STStr: snprintf(aOut, aMax, "STR"); break;
+	case STStr: case STHostPort: snprintf(aOut, aMax, "STR"); break;
 	case STSecret: snprintf(aOut, aMax, "SECRET"); break;
 	case STPorts: snprintf(aOut, aMax, "PORTS"); break;
 	case STPins: snprintf(aOut, aMax, "PINS"); break;

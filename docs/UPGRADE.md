@@ -210,7 +210,7 @@ one HAL class per platform does the I/O.
 ```
  src/
    modem.cpp/.h      the modem: AT parser, +++ escape, dial, ring, pacing, baud trial
-   settings.cpp/.h   the two NVS records (Settings: 140 bytes as in 1.x; Settings2: new)
+   settings.cpp/.h   the NVS records (Settings: 140 bytes as in 1.x; Settings2: 2.0; Settings3: 2.7)
    schema.cpp/.h     one table of every setting: AT name, type, range, help, get/set
                      -> drives both the AT$ parser and the web pages (parity by construction)
    uplink.cpp/.h     the uplink manager: AUTO / WIFI / USB, fallback, status
@@ -301,6 +301,18 @@ version and a length, loaded length-tolerantly:
   keepalive. Saved when it is pasted (web page, `AT$WGL=END`); a record that
   is not complete and sane is ignored.
 
+2.7 adds **`cfg3`** (`Settings3`, magic `ATM3`, 256 bytes: a version and a
+length, the fields, spare bytes). `cfg2` cannot grow: a firmware before 2.7
+refuses a `cfg2` longer than its own, so a firmware trial that rolled back
+would reset every setting. New fields therefore go in `cfg3`, whose load
+takes a shorter record (missing fields at their factory values) and a
+longer one (the fields it knows) alike, so moving between firmware versions
+keeps them.
+
+| Field | Default | AT | Notes |
+|---|---|---|---|
+| psiProxy (2.7) | (none) | `$PU` | host:port of PsiProxy on a computer (port 8081 if left out). A call to psiproxy goes to it when it answers within 2.5 s; otherwise the built-in proxy. A failure is remembered for 60 s (forgotten when `$PU` changes or the uplink's address does) |
+
 `AT&W` saves the records. `AT&F` resets the settings but keeps the WiFi
 network, as before (and the saved networks and the WireGuard config). `AT$RESET=YES`, the web page's *Factory reset*, and holding the
 button while powering up clear both records.
@@ -365,6 +377,7 @@ power-off unless `AT&W` saves them.
 | (TCP 192.168.7.1:2323) | (2.2) AT commands over PPP for PsiConnect: while a PPP link is up, the same commands and answers over TCP from the PPP side (one client, no password, 120 s idle). Those that would end the link or change the serial line answer `+NOTVIAPPP: why` then `ERROR`; `ATZ` keeps the live link. See the README's *AT commands over PPP* |
 | `AT$LOGL=0/1/2` | How much is logged |
 | `AT$WEBPIECES=ON/OFF` | Large web replies in pieces (ON, the standard) or each at once |
+| `AT$PU=host:port` | (2.7) PsiProxy on a computer (port 8081 if left out; empty: none). A call to `psiproxy`, dialled or over PPP to 192.168.7.1:8080, goes straight to it when it answers; otherwise the built-in proxy. `AT$STAT?` adds `PU="host:port"` and `PUOK=-1/0/1` (not tried, the last try failed, it answered) |
 | `AT$RESET=YES` | Factory reset, both records, WiFi included; the modem restarts |
 
 `ATI` now adds the uplink in use, the USB port's mode and what is on it,

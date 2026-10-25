@@ -408,6 +408,9 @@ public:
 	am::WgConfig savedWg; bool haveWg = false;
 	bool LoadSettings2(am::Settings2& s, size_t& len) override { len = haveSaved2 ? sizeof(s) : 0; if (haveSaved2) s = saved2; return haveSaved2; }
 	bool SaveSettings2(const am::Settings2& s) override { saved2 = s; haveSaved2 = true; return true; }
+	am::Settings3 saved3; bool haveSaved3 = false;
+	bool LoadSettings3(am::Settings3& s, size_t& len) override { len = haveSaved3 ? sizeof(s) : 0; if (haveSaved3) s = saved3; return haveSaved3; }
+	bool SaveSettings3(const am::Settings3& s) override { saved3 = s; haveSaved3 = true; return true; }
 	bool LoadNets(am::NetList& l, size_t& len) override { len = haveNets ? sizeof(l) : 0; if (haveNets) l = savedNets; return haveNets; }
 	bool SaveNets(const am::NetList& l) override { savedNets = l; haveNets = true; fprintf(stderr, "\n[nets saved: %u]\n", (unsigned)l.count); return true; }
 	bool LoadWg(am::WgConfig& c, size_t& len) override { len = haveWg ? sizeof(c) : 0; if (haveWg) c = savedWg; return haveWg; }

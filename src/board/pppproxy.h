@@ -7,6 +7,10 @@
 // server exists only while a PPP link is up, and takes connections from the
 // PPP side only. Memory for the call is taken when the link comes up and
 // given back when it goes.
+// 2.7: with AT$PU set, each connection first tries PsiProxy on a computer
+// (Modem::PsiProxyWorth, the same rule as a dial); when it answers, the
+// connection's bytes are relayed both ways to it, and the built-in proxy
+// takes no part.
 // MIT licence (see LICENSE at the top of the repository).
 #ifndef ATOM_PPPPROXY_H
 #define ATOM_PPPPROXY_H
@@ -29,6 +33,8 @@ private:
 	void Close(Hal& aHal);
 	void EndClient();
 	void Serve(Modem& aModem);
+	void Relay();
+	void SendRing();
 
 	WiFiServer* iServer;
 	WiFiClient iClient;
@@ -38,6 +44,8 @@ private:
 	bool iActive;
 	bool iHaveClient;
 	bool iEnding;                                  // the call is over: the rest of the ring goes first
+	WiFiClient iUp;                                // 2.7: PsiProxy, when the connection is relayed to it
+	bool iRelay;
 	uint8_t iIn[512];
 	size_t iInLen;
 	};

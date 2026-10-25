@@ -1249,6 +1249,77 @@ static void TestPictures()
 	}
 	}
 
+// 2.7: PsiProxy's own services (/_dist/, /_call/, /_apk/, /_putlog) are
+// answered by the built-in proxy with a 501 an app can recognise
+static void TestNoPsiProxy()
+	{
+	Rig r;
+	int reqs = 0;
+	r.hal.responder = [&](const std::string&, bool&) { reqs++; return Reply(200, "text/plain", "upstream"); };
+	r.TypeRun("ATE0\r");
+	r.Got();
+	r.TypeRun("ATDT psiproxy:8080\r", 100);
+	CHECK(Has(r.Got(), "CONNECT") && r.modem->ProxyCall());
+	// origin-form with Host psiproxy, no body: the 501, and the call kept
+	r.TypeRun("GET /_dist/manifest HTTP/1.1\r\nHost: psiproxy\r\n\r\n", 300);
+	std::vector<Resp> v = Responses(r.Got());
+	CHECK(v.size() == 1 && v[0].status == 501 && v[0].complete);
+	if (v.size() == 1)
+		{
+		CHECK(v[0].h["x-psiconnect"] == "no-psiproxy" && v[0].h["content-type"] == "text/plain");
+		CHECK(v[0].body == "Needs PsiProxy on a computer: set it in the modem's Web proxy settings (AT$PU)");
+		CHECK(v[0].body == am::Proxy::kNoPsiProxyBody && v[0].h["connection"] == "keep-alive");
+		}
+	CHECK(r.modem->Connected() && r.modem->ProxyCall());
+	// no Host at all (an origin-form request is the proxy's own)
+	r.TypeRun("GET /_call/ring HTTP/1.1\r\n\r\n", 300);
+	v = Responses(r.Got());
+	CHECK(v.size() == 1 && v[0].status == 501 && v[0].h["x-psiconnect"] == "no-psiproxy");
+	// absolute form, to psiproxy or to 192.168.7.1 (the PPP route's address), any port
+	r.TypeRun("GET http://psiproxy/_apk/x.apk HTTP/1.1\r\nHost: psiproxy\r\n\r\n", 300);
+	v = Responses(r.Got());
+	CHECK(v.size() == 1 && v[0].status == 501 && v[0].h["x-psiconnect"] == "no-psiproxy");
+	r.TypeRun("GET http://192.168.7.1:8080/_dist/PsiMail.sis HTTP/1.1\r\nHost: 192.168.7.1:8080\r\n\r\n", 300);
+	v = Responses(r.Got());
+	CHECK(v.size() == 1 && v[0].status == 501 && v[0].h["x-psiconnect"] == "no-psiproxy");
+	// HEAD: the head only
+	r.TypeRun("HEAD http://PSIPROXY/_dist/manifest HTTP/1.1\r\n\r\n", 300);
+	std::string g = r.Got();
+	CHECK(Has(g, "HTTP/1.1 501 Not Implemented\r\n") && Has(g, "X-PsiConnect: no-psiproxy\r\n") && !Has(g, "Needs PsiProxy"));
+	CHECK(reqs == 0 && r.hal.upConnects == 0);
+	// "/" is still the status page, saying there is no PsiProxy
+	r.TypeRun("GET / HTTP/1.1\r\nHost: psiproxy\r\n\r\n", 300);
+	v = Responses(r.Got());
+	CHECK(v.size() == 1 && v[0].status == 200 && Has(v[0].body, "PsiProxy on a computer: none set"));
+	r.TypeRun("GET http://psiproxy/ HTTP/1.1\r\nHost: psiproxy\r\n\r\n", 300);
+	v = Responses(r.Got());
+	CHECK(v.size() == 1 && v[0].status == 200 && Has(v[0].body, "web proxy") && !v[0].h.count("x-psiconnect"));
+	// "/_..." on any other site is that site's page
+	r.TypeRun("GET http://example.com/_next/a.js HTTP/1.1\r\nHost: example.com\r\n\r\n", 300);
+	v = Responses(r.Got());
+	CHECK(v.size() == 1 && v[0].status == 200 && v[0].body == "upstream" && reqs == 1);
+	r.TypeRun("GET /_next/b.js HTTP/1.1\r\nHost: example.com\r\n\r\n", 300);
+	v = Responses(r.Got());
+	CHECK(v.size() == 1 && v[0].status == 200 && reqs == 2);
+	// a log sent with POST (bigger than the proxy's request buffer): the 501
+	// at once, its body never read as a request, and the call ends
+	std::string log(20000, 'x');
+	for (size_t i = 0; i < log.size(); i += 80) log.replace(i, 22, "GET / HTTP/1.1\r\n\r\n   ");
+	r.TypeRun(("POST /_putlog?name=psimail.log HTTP/1.1\r\nHost: psiproxy\r\nContent-Type: text/plain\r\n"
+		"Content-Length: " + std::to_string(log.size()) + "\r\n\r\n" + log).c_str(), 3000);
+	g = r.Got();
+	CHECK(Has(g, "HTTP/1.1 501 Not Implemented\r\n") && Has(g, "X-PsiConnect: no-psiproxy\r\n") && Has(g, "Connection: close\r\n"));
+	CHECK(Has(g, am::Proxy::kNoPsiProxyBody) && Has(g, "\r\nNO CARRIER\r\n"));
+	CHECK(!Has(g, "HTTP/1.1 200") && g.find("HTTP/1.1 501") == g.rfind("HTTP/1.1 501"));
+	CHECK(!r.modem->Connected() && !r.modem->ProxyCall() && reqs == 2);
+	// a small POST: the 501, then the call ends too (the body is not read)
+	r.TypeRun("ATDT psiproxy:8080\r", 100);
+	CHECK(Has(r.Got(), "CONNECT"));
+	r.TypeRun("POST http://psiproxy/_putlog HTTP/1.1\r\nHost: psiproxy\r\nContent-Length: 5\r\n\r\nhello", 300);
+	g = r.Got();
+	CHECK(Has(g, "HTTP/1.1 501") && Has(g, "Connection: close") && Has(g, "\r\nNO CARRIER\r\n") && !r.modem->Connected());
+	}
+
 int main()
 	{
 	signal(SIGALRM, Hung);
@@ -1263,6 +1334,7 @@ int main()
 	printf("gzip\n");        TestProxyGzip();
 	printf("real page\n");   TestProxyRealPage();
 	printf("regressions\n"); TestProxyRegressions();
+	printf("no psiproxy\n"); TestNoPsiProxy();
 	alarm(300);
 	printf("reader\n");      TestReader();
 	printf("pictures\n");    TestPictures();
