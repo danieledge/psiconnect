@@ -266,8 +266,10 @@ For TLS termination (`AT$TLS=1`), set the PsiMail account's TLS to **none**,
 keeping port 993 (IMAP) and 465 (SMTP): the modem does the TLS. Only for
 your own modem on your own network; see `docs/UPGRADE.md`, section 9.
 
-For the web proxy, also set PsiWeb's **Tools > Preferences**: *Use a proxy*
-**Yes**, *Proxy host* **psiproxy**, *Proxy port* **8080**.
+For the web proxy, also set PsiWeb's **Tools > Connection settings**, page
+*Network*: *Use proxy* **Yes**, *Proxy host* **psiproxy**, *Proxy port*
+**8080**. These are the shared connection settings, so the one setting does
+for PsiTerm and PsiMail too.
 
 ## The web proxy for PsiWeb
 
@@ -278,9 +280,12 @@ that work instead.
 
 ### Using it
 
-1. In PsiWeb: **Tools > Preferences**, *Use a proxy* **Yes**, *Proxy host*
-   **psiproxy**, *Proxy port* **8080**.
+1. In PsiWeb: **Tools > Connection settings**, page *Network*: *Use proxy*
+   **Yes**, *Proxy host* **psiproxy**, *Proxy port* **8080**.
 2. Open any page, `http://` or `https://`.
+
+This one setting does for every set-up. With PsiProxy on a computer as well
+(`AT$PU`, below), the same calls go to it when it is there.
 
 PsiWeb then dials `ATDT psiproxy:8080`. The modem recognises the name and
 opens no TCP connection. It answers `CONNECT` and is itself the HTTP proxy at
@@ -290,8 +295,53 @@ as before.
 
 The call stays up between pages (HTTP keep-alive), whatever the site, so
 PsiWeb dials once and then fetches page after page. `http://psiproxy/` shows
-the proxy's status: its mode, the requests so far, bytes in and out, and the
-Atom's free memory.
+the proxy's status: its mode, the requests so far, bytes in and out, whether
+PsiProxy is set and answered, and the Atom's free memory.
+
+### With PsiProxy on a computer (2.7)
+
+[PsiProxy](https://github.com/danieledge/psiproxy) is the full proxy, in
+Python on a computer on your network (port 8081 unless you change it). It
+does more than the modem can: it slims each page for the 640x240 screen,
+converts every picture format (WebP and AVIF too), and serves the suite's
+own services: PsiInstall's packages (`/_dist/`), PsiCall (`/_call/`),
+PsiLinux packages (`/_apk/`) and *Send log* (`/_putlog`).
+
+Tell the modem where it is, and keep PsiWeb's proxy set to `psiproxy`:
+
+```
+AT$PU=192.168.1.20         (port 8081)
+AT$PU=mypc.lan:9000        (another port)
+AT&W
+```
+
+From then on a call to `psiproxy` first tries PsiProxy, waiting at most
+2.5 s:
+
+- **It answers**: the call goes straight to it, as a plain TCP call. The
+  modem passes the bytes both ways and does nothing else (the port dialled
+  is not used: PsiProxy's comes from `AT$PU`). The log says
+  `proxy: psiproxy -> PsiProxy at 192.168.1.20:8081`.
+- **It does not** (the computer is off, or you are away from home): the
+  modem's own proxy does the pages, as without `AT$PU`. The failure is
+  remembered for 60 s, so the calls after it do not each wait; a new
+  `AT$PU`, or another network, forgets it.
+
+The same goes for the PPP route: while a PPP call is up, each connection to
+192.168.7.1:8080 is relayed to PsiProxy when it answers, else served by the
+modem's own proxy.
+
+Empty (`AT$PU=`, the factory setting) means the modem's own proxy always.
+`ATI` has a *PsiProxy* line, and `AT$STAT?` gives `PU="host:port"` and
+`PUOK=` -1 (not tried), 0 (the last try failed) or 1 (it answered). The
+setting is under *Web proxy* on the settings page too.
+
+PsiProxy's own services need PsiProxy. When the modem's own proxy is asked
+for one (any address on `psiproxy` or 192.168.7.1 whose path starts with
+`/_`), it answers `501 Not Implemented` with the header
+`X-PsiConnect: no-psiproxy` and the line *Needs PsiProxy on a computer: set
+it in the modem's Web proxy settings (AT$PU)*, so the app can say what is
+missing. A request with a body (a log) ends the call after that answer.
 
 ### What it does
 
@@ -329,8 +379,8 @@ ones to the proxy as plain requests):
   of RAM. It makes the HTML about a third of the size. When the server is slow,
   the proxy flushes what it has, so PsiWeb can show the top of the page while
   the rest comes.
-- **Passes everything else through unchanged**: pictures, files, error
-  pages, cookies (`Set-Cookie`), `WWW-Authenticate` and caching headers.
+- **Passes everything else through unchanged**: files, pictures it does
+  not convert (see [Pictures](#pictures-20)), error pages, cookies (`Set-Cookie`), `WWW-Authenticate` and caching headers.
 
 `https://` links in pages are left as they are. PsiWeb sends every address to
 the proxy, so they come back through it anyway, and the Psion never does TLS.
@@ -410,8 +460,14 @@ then rebuild.
 
 ### Memory
 
-The ESP32 has 320 KB of RAM for data, and WiFi takes much of it. The proxy
-needs:
+The plain Atom's ESP32 has about 320 KB of RAM for data and the S3 boards'
+ESP32-S3 about 400 KB, and WiFi takes much of it. The AtomS3R also has 8 MB
+of PSRAM: there the ring to the Psion (256 KB, or 128 KB) and the PPP
+route's proxy buffer go in PSRAM, a picture being converted may be bigger
+(an interlaced file up to 2 MB is decoded whole), and the core's `malloc`
+puts any block of 4 KB or more in PSRAM, which leaves the internal memory to
+WiFi, TLS and the stacks. The figures below are for the internal memory of
+the boards without PSRAM. The proxy needs:
 
 | Part | RAM | When |
 |---|---|---|
@@ -420,9 +476,9 @@ needs:
 | The gzip writer | 16 KB | while a simplified page is sent |
 | The gzip reader | 43 KB | only for a server that sends gzip unasked |
 
-The ring to the Psion is therefore no longer simply as big as possible. The
-firmware takes the largest of 128, 96, 64, 48 or 32 KB that leaves 120 KB
-free, and the USB console prints the result at start-up. `ATI` shows the free
+The ring to the Psion is therefore no longer simply as big as possible.
+Without PSRAM the firmware takes the largest of 128, 96, 64, 48 or 32 KB
+that leaves 150 KB free, and the USB console prints the result at start-up. `ATI` shows the free
 memory, and the USB console logs each TLS handshake with its time and memory,
 and each request (`proxy: GET https://... -> 200, 950998 bytes in, 26577 out,
 217 ms`). The proxy adds to the ring only when 12 KB of it is free, so
@@ -434,7 +490,12 @@ pacing and TCP back-pressure work as for any connection.
   it.
 - No `CONNECT` tunnels: the proxy fetches `https://` itself.
 - Cookies set by a redirect itself are not passed on; the final page's are.
-- Pictures are passed through as they are, not scaled or converted.
+- Pictures are converted (`AT$PI=1`, the standard) only within limits: a
+  JPEG, PNG or GIF of at most `AT$PM` KB. Bigger files, and other formats
+  (WebP, AVIF, SVG), pass through unchanged. PsiProxy (`AT$PU`) converts
+  them all.
+- PsiProxy's own services (`/_dist/`, `/_call/`, `/_apk/`, `/_putlog`)
+  need PsiProxy on a computer (`AT$PU`).
 - One page at a time, as PsiWeb asks for them.
 
 ## Saved networks (2.2)
@@ -644,6 +705,7 @@ The full reference is in [`docs/UPGRADE.md`, section 6](docs/UPGRADE.md#6-at-com
 | `AT$WEBPIECES=ON/OFF` | Large pages and files sent a few KB at a time, with the serial line looked after in between (ON, the standard). Sent at once, a big one could hold the modem up long enough for the Psion's link to fail at 230400 with no flow control |
 | `AT$TLS=0/1`, `AT$TLSP=443,465,993,995`, `AT$TLSV=0/1`, `ATDT tls:host:port` | TLS termination |
 | `AT$PI=0/1`, `AT$PW=n`, `AT$PM=n` | Pictures to 16 greys through the proxy |
+| `AT$PU=host:port` | (2.7) PsiProxy on a computer (port 8081 if left out; empty: none). A call to `psiproxy` goes to it when it answers, else to the modem's own proxy. See [With PsiProxy on a computer](#with-psiproxy-on-a-computer-27) |
 | `AT$XE=0/1`, `AT$XH=host:port`, `AT$XK=token`, `AT$EXEC=cmd`, `ATDT psiexec` | Remote compute through `tools/psiexecd.py` |
 | `AT$LOG?`, `AT$LOGL=0/1/2` | The log kept in RAM (the USB console is gone in host mode) |
 | `AT$RESET=YES` | Factory reset, the WiFi too; restarts |
@@ -651,7 +713,7 @@ The full reference is in [`docs/UPGRADE.md`, section 6](docs/UPGRADE.md#6-at-com
 | `AT$WGCONF?` | (2.2) The tunnel's config as far as it may be shown: `+WGCONF:Address: ...`, `DNS`, `AllowedIPs`, `Endpoint`, `Keepalive`, and `Private key: set` |
 | `AT$WGL=line` ... `AT$WGL=END` | (2.2) A config sent line by line from a terminal (`AT$WGL=CLEAR` starts again). Send each line quoted with `\/` for a `/` (a key can hold an `a/`, which would otherwise be the `A/` repeat). `END` parses and saves it, or answers `+WGERR:<why>` and `ERROR`. Never logged. The web page is easier |
 | `AT$WGCLR=YES` | (2.2) Deletes the WireGuard config |
-| `AT$STAT?` | (2.3) adds `FW=OK/TRIAL/PREVIOUS`, for a firmware update on trial |
+| `AT$STAT?` | (2.3) adds `FW=OK/TRIAL/PREVIOUS`, for a firmware update on trial; (2.7) `PU=` and `PUOK=`, for PsiProxy |
 
 Secrets (`$PASS`, `$APPASS`, `$WEBPASS`, `$XK`, the WireGuard keys) are never
 printed: `?` says *(set)* or *(none)*, and the log leaves them out.
@@ -806,7 +868,9 @@ After `+++` nothing is sent until `ATO`.
 **PsiWeb over PPP:** while a PPP link is up the modem also serves its web
 proxy on **192.168.7.1, port 8080** (PPP side only). In PsiWeb's connection
 settings use *Proxy host* 192.168.7.1 and *Proxy port* 8080 and the
-"Psion Internet" route, instead of dialling `psiproxy`.
+"Psion Internet" route, instead of dialling `psiproxy`. With `AT$PU` set,
+each connection goes on to PsiProxy when it answers (see
+[With PsiProxy on a computer](#with-psiproxy-on-a-computer-27)).
 
 ### AT commands over PPP (PsiConnect)
 
@@ -1062,7 +1126,7 @@ DCD on all the time.
   `docs/UPGRADE.md`), against a model of the bootloader's otadata.
 - `python3 core/tools/emu/net.py proxy` (from a PsiWeb checkout beside this
   one, with this checkout's `hosttest/hostmodem`) is the
-  end-to-end test in the Psion emulator. PsiWeb sets *Use a proxy* to
+  end-to-end test in the Psion emulator. PsiWeb sets *Use proxy* to
   `psiproxy`, 8080, and opens a real site (`EMU_PROXY_URL`, by default
   `news.ycombinator.com`) through the host modem. It needs the Internet.
 
