@@ -307,6 +307,9 @@ converts every picture format (WebP and AVIF too), and serves the suite's
 own services: PsiInstall's packages (`/_dist/`), PsiCall (`/_call/`),
 PsiLinux packages (`/_apk/`) and *Send log* (`/_putlog`).
 
+[Choosing your setup](https://github.com/danieledge/psion-core/blob/main/docs/SETUP.md) compares what the modem, PsiProxy and both
+together give across the suite.
+
 Tell the modem where it is, and keep PsiWeb's proxy set to `psiproxy`:
 
 ```
