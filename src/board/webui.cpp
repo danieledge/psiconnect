@@ -73,6 +73,7 @@ void WebUi::Begin(Modem& aModem, AtomHal& aHal)
 	iServer.on("/vpn", HTTP_GET, [this]() { PageVpn(); });
 	iServer.on("/wg", HTTP_POST, [this]() { PostWg(); });
 	iServer.on("/net", HTTP_POST, [this]() { PostNet(); });
+	iServer.on("/pptest", HTTP_POST, [this]() { PostPsiProxyTest(); });
 	iServer.on("/api/settings", HTTP_GET, [this]() { ApiSettings(); });
 	iServer.on("/set", HTTP_POST, [this]() { Post(); });
 	iServer.on("/api/settings", HTTP_POST, [this]() { Post(); });
@@ -711,6 +712,9 @@ void WebUi::PageSettings()
 			Field(e);
 			}
 		Send("</table><button class=\"go\">Apply</button></form>");
+		if (grp == SGProxy)
+			Send("<form method=\"post\" action=\"/pptest\"><button>Test PsiProxy</button> "
+				"<small>(the address as applied: Apply a new one first)</small></form>");
 		if (grp == SGTls)
 			Send("<p><small>With TLS termination the modem sees your mail and pages in plain text, and so does the serial cable. "
 				"For your own modem on your own network only. Set the account's TLS to <i>none</i> in PsiMail, keeping port 993 or 465.</small></p>");
@@ -898,6 +902,76 @@ void WebUi::PostWg()
 		char m[120];
 		snprintf(m, sizeof(m), "Not saved: %s.", why);
 		Back(true, m, "/vpn");
+		}
+	}
+
+// /pptest: is PsiProxy (AT$PU) there? A connect as a call to psiproxy makes
+// it, then GET / and its home page must say PsiProxy. The outcome counts as a
+// try, so a pass also ends a remembered failure.
+void WebUi::PostPsiProxyTest()
+	{
+	if (!Allowed()) return;
+	char host[64], m[200];
+	uint16_t port;
+	const Settings3& s3 = iModem->Config3();
+	if (!s3.psiProxy[0])
+		{
+		Back(true, "No PsiProxy is set: enter its address under Web proxy and Apply first.", "/settings");
+		return;
+		}
+	if (!PsiProxyAddr(s3, host, sizeof(host), port))
+		{
+		snprintf(m, sizeof(m), "\"%s\" is not host:port.", s3.psiProxy);
+		Back(true, m, "/settings");
+		return;
+		}
+	uint32_t t0 = millis();
+	WiFiClient c;
+	if (!c.connect(host, port, (int32_t)Modem::kPsiProxyConnectMs))
+		{
+		iModem->PsiProxyNote(false, host, port);
+		snprintf(m, sizeof(m), "No answer from %s:%u in %lu.%lu s. Is PsiProxy running on that computer, "
+			"and is the address right?", host, (unsigned)port,
+			(unsigned long)(Modem::kPsiProxyConnectMs / 1000), (unsigned long)(Modem::kPsiProxyConnectMs % 1000 / 100));
+		Back(true, m, "/settings");
+		return;
+		}
+	c.setNoDelay(true);
+	c.print("GET / HTTP/1.0\r\nHost: psiproxy\r\nUser-Agent: PsiConnect\r\n\r\n");
+	char buf[768];
+	size_t n = 0;
+	while (n < sizeof(buf) - 1 && millis() - t0 < 6000 && (c.connected() || c.available()))
+		{
+		int k = c.read((uint8_t*)buf + n, sizeof(buf) - 1 - n);
+		if (k > 0)
+			n += k;
+		else
+			delay(10);
+		}
+	buf[n] = 0;
+	c.stop();
+	uint32_t ms = millis() - t0;
+	char status[48];
+	size_t sl = strcspn(buf, "\r\n");
+	snprintf(status, sizeof(status), "%.*s", (int)(sl < sizeof(status) - 1 ? sl : sizeof(status) - 1), buf);
+	if (strncmp(buf, "HTTP/1.", 7) == 0 && strstr(buf, " 200") == buf + 8 && strstr(buf, "PsiProxy"))
+		{
+		iModem->PsiProxyNote(true, host, port);
+		snprintf(m, sizeof(m), "PsiProxy at %s:%u is working (answered in %lu ms). Calls to psiproxy go to it.",
+			host, (unsigned)port, (unsigned long)ms);
+		Back(false, m, "/settings");
+		}
+	else if (!n)
+		{
+		snprintf(m, sizeof(m), "%s:%u took the connection but sent nothing back. If it is PsiProxy, "
+			"check that it allows this modem's address.", host, (unsigned)port);
+		Back(true, m, "/settings");
+		}
+	else
+		{
+		snprintf(m, sizeof(m), "Something answered at %s:%u, but not PsiProxy (\"%s\"). Is the port right? PsiProxy's is 8081.",
+			host, (unsigned)port, status);
+		Back(true, m, "/settings");
 		}
 	}
 

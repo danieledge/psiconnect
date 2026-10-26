@@ -336,7 +336,10 @@ modem's own proxy.
 Empty (`AT$PU=`, the factory setting) means the modem's own proxy always.
 `ATI` has a *PsiProxy* line, and `AT$STAT?` gives `PU="host:port"` and
 `PUOK=` -1 (not tried), 0 (the last try failed) or 1 (it answered). The
-setting is under *Web proxy* on the settings page too.
+setting is under *Web proxy* on the settings page too. Its **Test PsiProxy**
+button checks the address as applied: that it answers, and that what answers
+is PsiProxy (not something else on that port); a pass also ends a
+remembered failure.
 
 PsiProxy's own services need PsiProxy. When the modem's own proxy is asked
 for one (any address on `psiproxy` or 192.168.7.1 whose path starts with

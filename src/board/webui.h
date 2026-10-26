@@ -51,6 +51,7 @@ private:
 	void PageVpn();
 	void PostWg();
 	void PostNet();
+	void PostPsiProxyTest();                   // /pptest: is PsiProxy there?
 	void Back(bool aBad, const char* aText, const char* aBack);
 	void ApiSettings();
 	void Post();
