@@ -337,7 +337,7 @@ Empty (`AT$PU=`, the factory setting) means the modem's own proxy always.
 `ATI` has a *PsiProxy* line, and `AT$STAT?` gives `PU="host:port"` and
 `PUOK=` -1 (not tried), 0 (the last try failed) or 1 (it answered). The
 setting is under *Web proxy* on the settings page too. Its **Test PsiProxy**
-button checks the address as applied: that it answers, and that what answers
+button checks the address as saved: that it answers, and that what answers
 is PsiProxy (not something else on that port); a pass also ends a
 remembered failure.
 
@@ -741,6 +741,11 @@ the old settings, take effect after it, and go back by themselves if no
 command line is heard with them within 15 seconds (*"No command in 15 s with
 the new serial line settings: back to the old ones"*). A command heard, or
 `AT&W`, keeps them. From the web pages they take effect at once.
+
+**The web pages save as you go.** Each section's **Save** button applies its
+settings at once and keeps them after a restart (no `AT&W` needed). A
+setting changed with an AT command is kept only after `AT&W`, or **Save
+settings to flash** on the System page.
 
 ## Pacing in detail
 

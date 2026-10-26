@@ -441,7 +441,8 @@ void WebUi::Tail()
 	Send(kVersion);
 	Send(" on the ");
 	Send(kBoardName);
-	Send(". Settings take effect at once; <a href=\"/system\">save</a> them to keep them after a restart.</small></p></main></body></html>");
+	Send(". Save on these pages keeps a setting and it takes effect at once. A setting changed with an AT command is kept only after "
+		"<code>AT&amp;W</code> (or <a href=\"/system\">Save on the System page</a>).</small></p></main></body></html>");
 	iServer.sendContent("");
 	}
 
@@ -662,14 +663,15 @@ void WebUi::PageWifi()
 	Send("<h2>Access point</h2><p>This modem's own network, for these pages when it is not on yours: <b>");
 	SendEsc(iApName); Send("</b>");
 	if (iApUp) { Send(", up now with the password <b>"); SendEsc(iApPass); Send("</b>"); }
-	Send(".</p><form method=\"post\" action=\"/set\"><input type=\"hidden\" name=\"back\" value=\"/wifi\"><table>");
+	Send(".</p><form method=\"post\" action=\"/set\"><input type=\"hidden\" name=\"back\" value=\"/wifi\">"
+		"<input type=\"hidden\" name=\"save\" value=\"1\"><table>");
 	for (int i = 0; i < SchemaCount(); i++)
 		{
 		const SchemaEntry& e = SchemaAt(i);
 		if (strcmp(SchemaWebPage(e), "/wifi") == 0 && e.group != SGWifi)
 			Field(e);                           // (SSID and PASS: the form above)
 		}
-	Send("</table><button class=\"go\">Apply</button></form>");
+	Send("</table><button class=\"go\">Save</button></form>");
 	Tail();
 	}
 
@@ -702,7 +704,8 @@ void WebUi::PageSettings()
 		if (!any)
 			continue;
 		Send("<h2>"); Send(grp == SGExt ? mod->Name() : SchemaGroupName(grp)); Send("</h2>");
-		Send("<form method=\"post\" action=\"/set\"><input type=\"hidden\" name=\"back\" value=\"/settings\"><table>");
+		Send("<form method=\"post\" action=\"/set\"><input type=\"hidden\" name=\"back\" value=\"/settings\">"
+			"<input type=\"hidden\" name=\"save\" value=\"1\"><table>");
 		for (int i = 0; i < SchemaCount(); i++)
 			{
 			const SchemaEntry& e = SchemaAt(i);
@@ -711,10 +714,10 @@ void WebUi::PageSettings()
 				continue;
 			Field(e);
 			}
-		Send("</table><button class=\"go\">Apply</button></form>");
+		Send("</table><button class=\"go\">Save</button></form>");
 		if (grp == SGProxy)
 			Send("<form method=\"post\" action=\"/pptest\"><button>Test PsiProxy</button> "
-				"<small>(the address as applied: Apply a new one first)</small></form>");
+				"<small>(the address as saved: Save a new one first)</small></form>");
 		if (grp == SGTls)
 			Send("<p><small>With TLS termination the modem sees your mail and pages in plain text, and so does the serial cable. "
 				"For your own modem on your own network only. Set the account's TLS to <i>none</i> in PsiMail, keeping port 993 or 465.</small></p>");
@@ -779,7 +782,8 @@ void WebUi::PageSystem()
 	if (!Allowed()) return;
 	Head("System");
 	Send("<h2>Save</h2><form method=\"post\" action=\"/set\"><input type=\"hidden\" name=\"back\" value=\"/system\">"
-		"<input type=\"hidden\" name=\"save\" value=\"1\"><button class=\"go\">Save settings to flash</button></form>");
+		"<input type=\"hidden\" name=\"save\" value=\"1\"><button class=\"go\">Save settings to flash</button></form>"
+		"<p><small>The other pages save as you go: this is for settings changed with AT commands and not yet saved with AT&amp;W.</small></p>");
 	Send("<h2>Restart</h2><form method=\"post\" action=\"/set\"><input type=\"hidden\" name=\"restart\" value=\"1\"><button>Restart the modem</button></form>");
 	{
 	char t[160];
@@ -839,7 +843,7 @@ void WebUi::PageVpn()
 	for (int i = 0; i < SchemaCount(); i++)
 		if (strcmp(SchemaWebPage(SchemaAt(i)), "/vpn") == 0)
 			Field(SchemaAt(i));
-	Send("</table><button class=\"go\">Apply and save</button></form>");
+	Send("</table><button class=\"go\">Save</button></form>");
 	Send("<h2>Config</h2>");
 	if (WgValid(c))
 		{
@@ -916,7 +920,7 @@ void WebUi::PostPsiProxyTest()
 	const Settings3& s3 = iModem->Config3();
 	if (!s3.psiProxy[0])
 		{
-		Back(true, "No PsiProxy is set: enter its address under Web proxy and Apply first.", "/settings");
+		Back(true, "No PsiProxy is set: enter its address under Web proxy and Save first.", "/settings");
 		return;
 		}
 	if (!PsiProxyAddr(s3, host, sizeof(host), port))
