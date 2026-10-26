@@ -73,7 +73,7 @@ public:
 	// PsiProxy on a computer (AT$PU), in a few words for the status page
 	// ("none set (AT$PU)", "192.168.1.20:8081, did not answer ...")
 	void Upstream(const char* aText);
-	// PsiProxy's own services (/_dist/, /_call/, /_apk/, /_putlog...): the
+	// PsiProxy's own services (/_apk/, /_putlog...): the
 	// built-in proxy answers a request for one with a 501 carrying this
 	// header and body, so an app can tell the user what is missing
 	static const char* const kNoPsiProxyHeader;   // "X-PsiConnect: no-psiproxy"

@@ -577,7 +577,7 @@ static bool OwnHost(const char* aHost, size_t aLen)
 
 // Is this request head (not yet taken apart) for one of PsiProxy's services:
 // a path starting "/_", asked of the proxy itself ("POST /_putlog" with Host
-// psiproxy, or "GET http://psiproxy/_dist/manifest")?
+// psiproxy, or "GET http://psiproxy/_apk/...")?
 static bool ServiceRequest(const char* aHead, size_t aLen)
 	{
 	const char* end = aHead + aLen;

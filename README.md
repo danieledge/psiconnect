@@ -304,8 +304,7 @@ PsiProxy is set and answered, and the Atom's free memory.
 Python on a computer on your network (port 8081 unless you change it). It
 does more than the modem can: it slims each page for the 640x240 screen,
 converts every picture format (WebP and AVIF too), and serves the suite's
-own services: PsiInstall's packages (`/_dist/`), PsiCall (`/_call/`),
-PsiLinux packages (`/_apk/`) and *Send log* (`/_putlog`).
+own services: PsiLinux packages (`/_apk/`) and *Send log* (`/_putlog`).
 
 [Choosing your setup](https://github.com/danieledge/psion-core/blob/main/docs/SETUP.md) compares what the modem, PsiProxy and both
 together give across the suite.
@@ -497,7 +496,7 @@ pacing and TCP back-pressure work as for any connection.
   JPEG, PNG or GIF of at most `AT$PM` KB. Bigger files, and other formats
   (WebP, AVIF, SVG), pass through unchanged. PsiProxy (`AT$PU`) converts
   them all.
-- PsiProxy's own services (`/_dist/`, `/_call/`, `/_apk/`, `/_putlog`)
+- PsiProxy's own services (any path starting `/_`, such as `/_apk/` and `/_putlog`)
   need PsiProxy on a computer (`AT$PU`).
 - One page at a time, as PsiWeb asks for them.
 

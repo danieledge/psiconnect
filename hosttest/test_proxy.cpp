@@ -1249,7 +1249,7 @@ static void TestPictures()
 	}
 	}
 
-// 2.7: PsiProxy's own services (/_dist/, /_call/, /_apk/, /_putlog) are
+// 2.7: PsiProxy's own services (/_apk/, /_putlog...) are
 // answered by the built-in proxy with a 501 an app can recognise
 static void TestNoPsiProxy()
 	{
@@ -1261,7 +1261,7 @@ static void TestNoPsiProxy()
 	r.TypeRun("ATDT psiproxy:8080\r", 100);
 	CHECK(Has(r.Got(), "CONNECT") && r.modem->ProxyCall());
 	// origin-form with Host psiproxy, no body: the 501, and the call kept
-	r.TypeRun("GET /_dist/manifest HTTP/1.1\r\nHost: psiproxy\r\n\r\n", 300);
+	r.TypeRun("GET /_apk/search HTTP/1.1\r\nHost: psiproxy\r\n\r\n", 300);
 	std::vector<Resp> v = Responses(r.Got());
 	CHECK(v.size() == 1 && v[0].status == 501 && v[0].complete);
 	if (v.size() == 1)
@@ -1272,18 +1272,18 @@ static void TestNoPsiProxy()
 		}
 	CHECK(r.modem->Connected() && r.modem->ProxyCall());
 	// no Host at all (an origin-form request is the proxy's own)
-	r.TypeRun("GET /_call/ring HTTP/1.1\r\n\r\n", 300);
+	r.TypeRun("GET /_putlog HTTP/1.1\r\n\r\n", 300);
 	v = Responses(r.Got());
 	CHECK(v.size() == 1 && v[0].status == 501 && v[0].h["x-psiconnect"] == "no-psiproxy");
 	// absolute form, to psiproxy or to 192.168.7.1 (the PPP route's address), any port
 	r.TypeRun("GET http://psiproxy/_apk/x.apk HTTP/1.1\r\nHost: psiproxy\r\n\r\n", 300);
 	v = Responses(r.Got());
 	CHECK(v.size() == 1 && v[0].status == 501 && v[0].h["x-psiconnect"] == "no-psiproxy");
-	r.TypeRun("GET http://192.168.7.1:8080/_dist/PsiMail.sis HTTP/1.1\r\nHost: 192.168.7.1:8080\r\n\r\n", 300);
+	r.TypeRun("GET http://192.168.7.1:8080/_apk/index HTTP/1.1\r\nHost: 192.168.7.1:8080\r\n\r\n", 300);
 	v = Responses(r.Got());
 	CHECK(v.size() == 1 && v[0].status == 501 && v[0].h["x-psiconnect"] == "no-psiproxy");
 	// HEAD: the head only
-	r.TypeRun("HEAD http://PSIPROXY/_dist/manifest HTTP/1.1\r\n\r\n", 300);
+	r.TypeRun("HEAD http://PSIPROXY/_putlog HTTP/1.1\r\n\r\n", 300);
 	std::string g = r.Got();
 	CHECK(Has(g, "HTTP/1.1 501 Not Implemented\r\n") && Has(g, "X-PsiConnect: no-psiproxy\r\n") && !Has(g, "Needs PsiProxy"));
 	CHECK(reqs == 0 && r.hal.upConnects == 0);

@@ -40,7 +40,7 @@ static const SchemaEntry kSchema[] =
 	// the web proxy
 	{ "PX", STProxyMode, F1(proxy), 0, 4, 0, SANone, SGProxy, "Web proxy", "0 off, 1 simplified pages, 2 text only, 3 pages unchanged (TLS only), 4 reader" },
 	{ "PZ", STBoolInv, F1(proxyNoZip), 0, 1, 0, SANone, SGProxy, "Gzip pages", "1: the proxy gzips pages for the line" },
-	{ "PU", STHostPort, F3(psiProxy), 0, 63, 0, SAPsiProxy, SGProxy, "PsiProxy", "host:port of PsiProxy on a computer on your network (port 8081 if left out). When it answers, a call to psiproxy goes straight to it (full page slimming, every picture format, PsiInstall, PsiCall, PsiLinux packages, Send log); otherwise the modem's own proxy does the pages. Empty: the modem's own proxy always" },
+	{ "PU", STHostPort, F3(psiProxy), 0, 63, 0, SAPsiProxy, SGProxy, "PsiProxy", "host:port of PsiProxy on a computer on your network (port 8081 if left out). When it answers, a call to psiproxy goes straight to it (full page slimming, every picture format, PsiLinux packages, Send log); otherwise the modem's own proxy does the pages. Empty: the modem's own proxy always" },
 	// TLS termination
 	{ "TLS", STBool, F2(tls), 0, 1, 0, SANone, SGTls, "TLS termination", "1: a dial to one of the ports below is made over TLS by the modem; the Psion sees the plain protocol" },
 	{ "TLSP", STPorts, F2(tlsPorts), 0, 0, 0, SANone, SGTls, "TLS ports", "The ports it applies to, e.g. 443,465,993,995" },
