@@ -16,9 +16,10 @@
 //
 // Dialling "psiproxy" (ATDT psiproxy:8080) opens no TCP connection: the
 // modem is then a web proxy for PsiWeb itself (proxy.h), doing the TLS and
-// simplifying pages. "psiexec" is a text channel to a helper on the LAN
-// (AT$XE). "tls:host:port", or a port in AT$TLSP with AT$TLS=1, makes the
-// modem do the TLS and give the Psion the plain protocol.
+// simplifying pages; or, with AT$PU set and PsiProxy on a computer
+// answering, a plain TCP call to PsiProxy. "psiexec" is a text channel to
+// a helper on the LAN (AT$XE). "tls:host:port", or a port in AT$TLSP with
+// AT$TLS=1, makes the modem do the TLS and give the Psion the plain protocol.
 #ifndef ATOM_MODEM_H
 #define ATOM_MODEM_H
 
@@ -149,6 +150,9 @@ public:
 	virtual void SerialBaud(uint32_t aBaud) = 0;        // after the pending output
 	// TCP
 	virtual bool TcpConnect(const char* aHost, uint16_t aPort) = 0;   // blocks
+	// the same, giving up after about aMs (2.7: is PsiProxy there?). The
+	// default waits as long as TcpConnect does
+	virtual bool TcpConnectWithin(const char* aHost, uint16_t aPort, uint32_t aMs) { (void)aMs; return TcpConnect(aHost, aPort); }
 	virtual bool TcpOpen() = 0;                         // connected, or data still to read
 	virtual size_t TcpAvailable() = 0;
 	virtual size_t TcpRead(uint8_t* aBuf, size_t aMax) = 0;
@@ -226,6 +230,10 @@ public:
 	// the 2.0 record: aLength is how many bytes were stored (an older record is shorter)
 	virtual bool LoadSettings2(Settings2& aS, size_t& aLength) { (void)aS; aLength = 0; return false; }
 	virtual bool SaveSettings2(const Settings2& aS) { (void)aS; return true; }
+	// the 2.7 record (aLength as above; a newer firmware's longer record is
+	// cut to ours)
+	virtual bool LoadSettings3(Settings3& aS, size_t& aLength) { (void)aS; aLength = 0; return false; }
+	virtual bool SaveSettings3(const Settings3& aS) { (void)aS; return true; }
 	// 2.2: the saved networks and the WireGuard config, each its own record
 	virtual bool LoadNets(NetList& aL, size_t& aLength) { (void)aL; aLength = 0; return false; }
 	virtual bool SaveNets(const NetList& aL) { (void)aL; return true; }
@@ -273,10 +281,12 @@ public:
 	bool Connected() const { return iConnected; }
 	const Settings& Config() const { return iS; }
 	const Settings2& Config2() const { return iS2; }
+	const Settings3& Config3() const { return iS3; }
 	size_t Buffered() const { return iRing.Count(); }
 	uint32_t ToPsion() const { return iToPsion; }
 	uint32_t ToServer() const { return iToServer; }
 	bool ProxyCall() const { return iProxyCall; }
+	bool PsiProxyCall() const { return iPsiProxyCall; }    // (2.7: handed to PsiProxy on a computer)
 	bool ExecCall() const { return iExecCall; }
 	bool PppCall() const { return iPppCall; }
 	// extension modules (ext.h), given by main.cpp (or a test): a dial to
@@ -308,6 +318,22 @@ public:
 	void ConfigMode(bool aOn);
 	bool InConfigMode() const { return iConfigMode; }
 	void LogLine(const char* aLine) { iHal.Log(aLine); }
+
+	// ----- 2.7: PsiProxy on a computer (AT$PU) -----
+	// A call to psiproxy (a dial, or a connection to 192.168.7.1:8080 over
+	// PPP) goes to PsiProxy when it answers, else to the built-in proxy. A
+	// try that fails is remembered for kPsiProxyRetryMs, so the calls after
+	// it do not each wait; a new AT$PU or another network forgets it.
+	static const uint32_t kPsiProxyConnectMs = 2500;
+	static const uint32_t kPsiProxyRetryMs = 60000;
+	// should this call try PsiProxy? True: aHost and aPort say where it is
+	bool PsiProxyWorth(char* aHost, size_t aHostMax, uint16_t& aPort);
+	// how the try went (logged)
+	void PsiProxyNote(bool aReached, const char* aHost, uint16_t aPort);
+	// -1 not tried (or none set), 0 the last try failed, 1 it answered
+	int PsiProxyLast() const { return iPuLast; }
+	// a line for ATI and the proxy's page: "none set (AT$PU)", "192.168.1.20:8081, answered at the last try"
+	void PsiProxyText(char* aOut, size_t aMax) const;
 
 	// ----- 2.2: the saved networks -----
 	const NetList& Nets() const { return iNets; }
@@ -398,6 +424,7 @@ private:
 	Ring iRing;
 	Settings iS;
 	Settings2 iS2;
+	Settings3 iS3;
 	Pacer iPacer;
 	Uplink iUplink;
 	char iLine[256];
@@ -434,6 +461,10 @@ private:
 	uint32_t iExtId;
 	bool iExecOneShot;                  // ... from AT$EXEC=: ends with OK, not NO CARRIER
 	bool iTlsCall;                      // the call is TLS-terminated here
+	bool iPsiProxyCall;                 // 2.7: a psiproxy call handed to PsiProxy (plain TCP)
+	int iPuLast;                        // PsiProxyLast()
+	uint32_t iPuFailMs;                 // when the last try failed
+	uint32_t iPuIp;                     // the uplink's address then (another network: try again)
 	bool iConfigMode;
 	uint32_t iConfigUntilMs;
 	uint32_t iLastTickMs;

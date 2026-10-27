@@ -1,5 +1,5 @@
 // schema.h - one table of every setting the modem has: its AT$ name, its
-// type and range, where it lives in the two records, what has to be
+// type and range, where it lives in the three records, what has to be
 // re-applied after it changes, and a line of help. The AT$ parser
 // (modem.cpp) and the web pages (board/webui.cpp) both work from this
 // table, so a setting cannot exist on one and not the other, and the host
@@ -24,10 +24,11 @@ enum TSchemaType
 	STStr,           // a string field
 	STSecret,        // a string field that is never shown ("(set)" / "(none)")
 	STPorts,         // AT$TLSP: a list of ports
-	STPins           // AT$PINS: tx,rx,rts,cts,dcd
+	STPins,          // AT$PINS: tx,rx,rts,cts,dcd
+	STHostPort       // a string field holding host or host:port (AT$PU); "STR" to AT$SCHEMA?
 	};
 
-enum TSchemaRec { SR1, SR2 };
+enum TSchemaRec { SR1, SR2, SR3 };
 
 // what the modem does after a change
 enum TSchemaApply
@@ -42,7 +43,8 @@ enum TSchemaApply
 	SAUplink,        // the uplink manager
 	SAUsb,           // the USB port's mode: at the next restart
 	SADcd,           // the DCD line is driven again
-	SAWg             // the WireGuard tunnel decides again (2.2)
+	SAWg,            // the WireGuard tunnel decides again (2.2)
+	SAPsiProxy       // AT$PU (2.7): the next psiproxy call tries PsiProxy afresh
 	};
 
 // SGExt: an extension module's own settings (ext.h), shown under its name

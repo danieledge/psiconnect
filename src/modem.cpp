@@ -388,7 +388,8 @@ Modem::Modem(Hal& aHal, uint8_t* aRing, size_t aRingSize)
 	: iHal(aHal), iLineLen(0), iOnline(false), iConnected(false), iClosing(false), iWifiWasUp(false),
 	  iLastSerialMs(0), iPluses(0), iLastPlusMs(0), iToPsion(0), iToServer(0), iLastDataMs(0),
 	  iPendingBaud(0), iTrialFrom(0), iTrialStartMs(0), iTrialArmed(false), iTrialGen(0), iLed(-1), iProxy(aHal),
-	  iProxyCall(false), iPppCall(false), iExecCall(false), iExtCount(0), iExtCall(0), iExtId(0), iExecOneShot(false), iTlsCall(false), iConfigMode(false),
+	  iProxyCall(false), iPppCall(false), iExecCall(false), iExtCount(0), iExtCall(0), iExtId(0), iExecOneShot(false), iTlsCall(false),
+	  iPsiProxyCall(false), iPuLast(-1), iPuFailMs(0), iPuIp(0), iConfigMode(false),
 	  iConfigUntilMs(0), iLastTickMs(0), iJoinMs(0), iJoinFail(0), iWifiDownMs(0), iWifiRetryMs(0), iWifiRetries(0), iProbeDueMs(0), iLastWifiState(-1),
 	  iLastActive(-1), iPppUplink(-1), iNetSkip(0), iNetTrying(-1), iWgWant(EWgWantOff), iWgApplied(false), iWgGen(1), iWgAppliedGen(0),
 	  iWgIp(0), iWgLastState(-1), iWgTickMs(0), iLastDnsOk(-1), iDnsUp(0), iWgTextLen(0), iWgTextBad(false), iPendingPins(false),
@@ -408,6 +409,7 @@ Modem::Modem(Hal& aHal, uint8_t* aRing, size_t aRingSize)
 	iLastDialResult[0] = 0;
 	FactoryDefaults(iS);
 	FactoryDefaults2(iS2);
+	FactoryDefaults3(iS3);
 	}
 
 void Modem::LoadAll()
@@ -424,6 +426,15 @@ void Modem::LoadAll()
 		iS2 = s2;
 	else
 		FactoryDefaults2(iS2);
+	// 2.7
+	Settings3 s3;
+	len = 0;
+	memset(&s3, 0, sizeof(s3));
+	if (iHal.LoadSettings3(s3, len) && AcceptSettings3(s3, len))
+		iS3 = s3;
+	else
+		FactoryDefaults3(iS3);
+	iPuLast = -1;
 	// 2.2: the saved networks and the WireGuard config
 	static NetList nl;                       // (static: kept off the stack)
 	len = 0;
@@ -1050,6 +1061,9 @@ void Modem::Apply(TSchemaApply aWhat, uint32_t aOldBaud, bool aFromPsion)
 	case SAWg:
 		iWgGen++;                            // NetTick decides again at once
 		break;
+	case SAPsiProxy:
+		iPuLast = -1;                        // (a failure at the old address is forgotten)
+		break;
 	case SABaud:
 		if (iS.baud != aOldBaud)
 			{
@@ -1091,7 +1105,7 @@ void Modem::Apply(TSchemaApply aWhat, uint32_t aOldBaud, bool aFromPsion)
 
 bool Modem::WebSet(const SchemaEntry& aE, const char* aValue)
 	{
-	am::Config c = { iS, iS2 };
+	am::Config c = { iS, iS2, iS3 };
 	uint32_t oldBaud = iS.baud;
 	if (!SchemaSet(c, aE, aValue))
 		return false;
@@ -1101,7 +1115,7 @@ bool Modem::WebSet(const SchemaEntry& aE, const char* aValue)
 
 void Modem::WebGet(const SchemaEntry& aE, char* aOut, size_t aMax) const
 	{
-	am::Config c = { const_cast<Settings&>(iS), const_cast<Settings2&>(iS2) };
+	am::Config c = { const_cast<Settings&>(iS), const_cast<Settings2&>(iS2), const_cast<Settings3&>(iS3) };
 	SchemaGet(c, aE, aOut, aMax);
 	}
 
@@ -1110,6 +1124,8 @@ bool Modem::Save()
 	if (!iHal.SaveSettings(iS))
 		return false;
 	if (!iHal.SaveSettings2(iS2))
+		return false;
+	if (!iHal.SaveSettings3(iS3))
 		return false;
 	iTrialFrom = 0;                          // a saved speed is confirmed
 	iLineTrial = iLineArmed = false;         // ... and so are saved line settings
@@ -1146,6 +1162,8 @@ void Modem::Factory(bool aKeepWifi)
 	FactoryDefaults(f);
 	Settings2 f2;
 	FactoryDefaults2(f2);
+	FactoryDefaults3(iS3);                   // (AT$PU: none)
+	iPuLast = -1;
 	if (aKeepWifi)
 		{
 		memcpy(f.ssid, iS.ssid, sizeof(f.ssid));
@@ -1634,7 +1652,7 @@ Modem::TResult Modem::SetCommand(const char* aCmd, const char*& aP, bool& aHandl
 	if (!e)
 		return RError;
 	aHandled = true;
-	am::Config c = { iS, iS2 };
+	am::Config c = { iS, iS2, iS3 };
 	if (query)
 		{
 		if (e->type == STProxyMode)
@@ -1675,6 +1693,52 @@ Modem::TResult Modem::SetCommand(const char* aCmd, const char*& aP, bool& aHandl
 		}
 	Apply(e->apply, oldBaud, true);
 	return ROk;
+	}
+
+// ----- 2.7: PsiProxy on a computer ------------------------------------------------
+
+bool Modem::PsiProxyWorth(char* aHost, size_t aHostMax, uint16_t& aPort)
+	{
+	if (!PsiProxyAddr(iS3, aHost, aHostMax, aPort))
+		return false;
+	if (iPuLast != 0)
+		return true;
+	// it failed lately: not tried again for a while, unless the network changed
+	uint32_t ip = 0, mask = 0;
+	iHal.UplinkAddr(ip, mask);
+	return ip != iPuIp || iHal.Millis() - iPuFailMs >= kPsiProxyRetryMs;
+	}
+
+void Modem::PsiProxyNote(bool aReached, const char* aHost, uint16_t aPort)
+	{
+	char m[160];
+	if (aReached)
+		snprintf(m, sizeof(m), "proxy: psiproxy -> PsiProxy at %s:%u", aHost, (unsigned)aPort);
+	else
+		{
+		uint32_t mask = 0;
+		iPuIp = 0;
+		iHal.UplinkAddr(iPuIp, mask);
+		iPuFailMs = iHal.Millis();
+		snprintf(m, sizeof(m), "proxy: PsiProxy at %s:%u did not answer in %lu.%lu s: the modem's own proxy (tried again in %lu s)",
+			aHost, (unsigned)aPort, (unsigned long)(kPsiProxyConnectMs / 1000), (unsigned long)(kPsiProxyConnectMs % 1000 / 100),
+			(unsigned long)(kPsiProxyRetryMs / 1000));
+		}
+	iPuLast = aReached ? 1 : 0;
+	iHal.Log(m);
+	}
+
+void Modem::PsiProxyText(char* aOut, size_t aMax) const
+	{
+	char host[64];
+	uint16_t port;
+	if (!iS3.psiProxy[0])
+		snprintf(aOut, aMax, "none set (AT$PU): the modem's own proxy always");
+	else if (!PsiProxyAddr(iS3, host, sizeof(host), port))
+		snprintf(aOut, aMax, "\"%s\" is not host:port", iS3.psiProxy);
+	else
+		snprintf(aOut, aMax, "%s:%u, %s", host, (unsigned)port, iPuLast < 0 ? "not tried yet"
+			: iPuLast ? "answered at the last try" : "did not answer at the last try (the modem's own proxy does the pages)");
 	}
 
 // ATDT host:port (also ATDThost:port, ATD, ATDP, quotes): opens TCP.
@@ -1796,15 +1860,32 @@ Modem::TResult Modem::DialTo(const char* aArgs)
 		return RNoCarrier;
 	if (iConnected || iClosing)
 		Hangup(false);
-	// "psiproxy" (any port): the modem is PsiWeb's web proxy itself
-	bool proxy = ProxyMode(iS) != Proxy::EOff && StartsNoCase(target, Proxy::kName)
-		&& target[strlen(Proxy::kName)] == 0;
-	if (!tls && iS2.tls && TlsPort(iS2, (uint16_t)port))
-		tls = true;
+	bool psiproxy = StartsNoCase(target, Proxy::kName) && target[strlen(Proxy::kName)] == 0;
 	iHal.Led(ELedConnecting);
 	iLed = ELedConnecting;
-	if (proxy)
+	// "psiproxy" with AT$PU set (2.7): PsiProxy on a computer, when it answers
+	// within a moment; the call is then plain TCP to it, on its own port
+	bool handed = false;
+	char puHost[64];
+	uint16_t puPort = 0;
+	if (psiproxy && !tls && PsiProxyWorth(puHost, sizeof(puHost), puPort))
+		{
+		handed = iHal.TcpConnectWithin(puHost, puPort, kPsiProxyConnectMs);
+		PsiProxyNote(handed, puHost, puPort);
+		}
+	// "psiproxy" (any port): otherwise the modem is PsiWeb's web proxy itself
+	bool proxy = !handed && psiproxy && ProxyMode(iS) != Proxy::EOff;
+	if (!handed && !tls && iS2.tls && TlsPort(iS2, (uint16_t)port))
+		tls = true;
+	if (handed)
+		tls = false;                         // (connected already: plain TCP to PsiProxy)
+	else if (proxy)
+		{
+		char t[120];
+		PsiProxyText(t, sizeof(t));
+		iProxy.Upstream(t);
 		iProxy.Start(ProxyMode(iS), !iS.proxyNoZip, iS2.img ? iS2.imgWidth : 0, iS2.imgMaxKB);
+		}
 	else if (tls)
 		{
 		char why[96];
@@ -1824,6 +1905,7 @@ Modem::TResult Modem::DialTo(const char* aArgs)
 		return RNoCarrier;
 		}
 	iProxyCall = proxy;
+	iPsiProxyCall = handed;
 	iExecCall = false;
 	iExecOneShot = false;
 	iTlsCall = tls && !proxy;
@@ -1984,6 +2066,7 @@ void Modem::EndCall()
 	iExtCall = 0;
 	iExtId = 0;
 	iProxyCall = false;
+	iPsiProxyCall = false;
 	iPppCall = false;
 	iExecCall = false;
 	iTlsCall = false;
@@ -2042,6 +2125,12 @@ void Modem::Info()
 				: ProxyMode(iS) == Proxy::EReader ? "reader" : "simplified pages",
 			iS2.img ? ", pictures to 16 greys" : "", (unsigned long)iProxy.Requests());
 	SayLine(m);
+	{
+	char t[120];
+	PsiProxyText(t, sizeof(t));
+	snprintf(m, sizeof(m), "PsiProxy: %s", t);
+	SayLine(m);
+	}
 	char ports[48];
 	TlsPortsText(iS2, ports, sizeof(ports));
 	snprintf(m, sizeof(m), "TLS termination: %s (ports %s%s); remote compute: %s", iS2.tls ? "on" : "off", ports,
@@ -2093,7 +2182,7 @@ void Modem::ShowSettings()
 	char m[160];
 	snprintf(m, sizeof(m), "E%d V%d Q%d &C%d S2=%d S12=%d", iS.echo, iS.verbose, iS.quiet, iS.dcdMode, iS.s2, iS.s12);
 	SayLine(m);
-	am::Config c = { iS, iS2 };
+	am::Config c = { iS, iS2, iS3 };
 	for (int i = 0; i < SchemaCount(); i++)
 		{
 		const SchemaEntry& e = SchemaAt(i);
@@ -2108,7 +2197,7 @@ void Modem::ShowSettings()
 void Modem::Help()
 	{
 	char m[200];
-	am::Config c = { iS, iS2 };
+	am::Config c = { iS, iS2, iS3 };
 	for (int i = 0; i < SchemaCount(); i++)
 		{
 		const SchemaEntry& e = SchemaAt(i);
@@ -2374,6 +2463,12 @@ void Modem::Status()
 	snprintf(m, sizeof(m), "+STAT:WGRX=%lu", (unsigned long)iWgStatus.rx);
 	SayLine(m);
 	snprintf(m, sizeof(m), "+STAT:WGTX=%lu", (unsigned long)iWgStatus.tx);
+	SayLine(m);
+	// 2.7: PsiProxy on a computer (AT$PU), and whether the last try reached it
+	Quote(iS3.psiProxy, q, sizeof(q));
+	snprintf(m, sizeof(m), "+STAT:PU=%s", q);
+	SayLine(m);
+	snprintf(m, sizeof(m), "+STAT:PUOK=%d", iS3.psiProxy[0] ? iPuLast : -1);
 	SayLine(m);
 	// the extension modules' own lines
 	for (int i = 0; i < iExtCount; i++)

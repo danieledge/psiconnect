@@ -11,7 +11,7 @@ static const size_t kWritePerPass = 4096;         // most bytes sent to the clie
 static const size_t kRingBytes = 32 * 1024;       // (Proxy::kSlack, 12 KB, must fit with room to spare)
 
 PppProxy::PppProxy()
-	: iServer(0), iProxy(0), iRingBuf(0), iActive(false), iHaveClient(false), iEnding(false), iInLen(0)
+	: iServer(0), iProxy(0), iRingBuf(0), iActive(false), iHaveClient(false), iEnding(false), iRelay(false), iInLen(0)
 	{}
 
 void PppProxy::Open(Modem& aModem, Hal& aHal)
@@ -51,6 +51,9 @@ void PppProxy::EndClient()
 	{
 	if (iProxy)
 		iProxy->Stop();
+	if (iRelay)
+		iUp.stop();
+	iRelay = false;
 	iClient.stop();
 	iHaveClient = false;
 	iEnding = false;
@@ -91,15 +94,39 @@ void PppProxy::Serve(Modem& aModem)
 			c.stop();
 			return;
 			}
-		const Settings& s = aModem.Config();
-		const Settings2& s2 = aModem.Config2();
-		iProxy->Start(ProxyMode(s), !s.proxyNoZip, s2.img ? s2.imgWidth : 0, s2.imgMaxKB);
+		// PsiProxy on a computer (AT$PU), when it answers; else the built-in proxy
+		char host[64];
+		uint16_t port = 0;
+		iRelay = false;
+		if (aModem.PsiProxyWorth(host, sizeof(host), port))
+			{
+			iRelay = iUp.connect(host, port, (int32_t)Modem::kPsiProxyConnectMs) != 0;
+			if (iRelay)
+				iUp.setNoDelay(true);
+			else
+				iUp.stop();
+			aModem.PsiProxyNote(iRelay, host, port);
+			}
+		if (!iRelay)
+			{
+			const Settings& s = aModem.Config();
+			const Settings2& s2 = aModem.Config2();
+			char t[120];
+			aModem.PsiProxyText(t, sizeof(t));
+			iProxy->Upstream(t);
+			iProxy->Start(ProxyMode(s), !s.proxyNoZip, s2.img ? s2.imgWidth : 0, s2.imgMaxKB);
+			}
 		iRing.Clear();
 		iClient = c;
 		iClient.setNoDelay(true);
 		iHaveClient = true;
 		iEnding = false;
 		iInLen = 0;
+		return;
+		}
+	if (iRelay)
+		{
+		Relay();
 		return;
 		}
 	// the Psion's request bytes into the proxy
@@ -129,7 +156,69 @@ void PppProxy::Serve(Modem& aModem)
 		if (!iProxy->Pump(iRing))
 			iEnding = true;                       // (the Psion asked for the close, and has its answer)
 		}
-	// the proxy's pages out
+	SendRing();
+	if (!iHaveClient)
+		return;
+	if (!iClient.connected() && !iClient.available())
+		EndClient();                              // the Psion went
+	else if (iEnding && !iRing.Count())
+		EndClient();
+	}
+
+// 2.7: a connection relayed to PsiProxy. The Psion's bytes go up as they
+// come (what the upstream will not take yet waits in iIn); PsiProxy's come
+// into the ring, which SendRing empties to the Psion
+void PppProxy::Relay()
+	{
+	if (!iEnding)
+		{
+		if (!iInLen)
+			{
+			int avail = iClient.available();
+			if (avail > 0)
+				{
+				int n = iClient.read(iIn, avail < (int)sizeof(iIn) ? avail : (int)sizeof(iIn));
+				if (n > 0)
+					iInLen = (size_t)n;
+				}
+			}
+		if (iInLen)
+			{
+			int w = ::send(iUp.fd(), iIn, iInLen, MSG_DONTWAIT);
+			if (w > 0)
+				{
+				memmove(iIn, iIn + w, iInLen - (size_t)w);
+				iInLen -= (size_t)w;
+				}
+			else if (w < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
+				iEnding = true;                   // (PsiProxy went)
+			}
+		uint8_t b[512];
+		for (int i = 0; i < 8 && iRing.Free() >= sizeof(b); i++)
+			{
+			int avail = iUp.available();
+			if (avail <= 0)
+				break;
+			int n = iUp.read(b, avail < (int)sizeof(b) ? avail : (int)sizeof(b));
+			if (n <= 0)
+				break;
+			iRing.Put(b, (size_t)n);
+			}
+		if (!iUp.connected() && !iUp.available())
+			iEnding = true;                       // PsiProxy closed: the rest of the ring, then the Psion's side
+		}
+	SendRing();
+	if (!iHaveClient)
+		return;
+	if (!iClient.connected() && !iClient.available())
+		EndClient();                              // the Psion went
+	else if (iEnding && !iRing.Count())
+		EndClient();
+	}
+
+// the ring out to the Psion
+void PppProxy::SendRing()
+	{
 	// (a raw non-blocking send: NetworkClient::write() would wait up to ~10 s on a full TCP
 	// buffer, and the loop task is also what drains the PPP queue that would unblock it)
 	size_t budget = kWritePerPass;
@@ -154,10 +243,6 @@ void PppProxy::Serve(Modem& aModem)
 		if ((size_t)w < run)
 			break;
 		}
-	if (!iClient.connected() && !iClient.available())
-		EndClient();                              // the Psion went
-	else if (iEnding && !iRing.Count())
-		EndClient();
 	}
 
 void PppProxy::Loop(Modem& aModem, Hal& aHal)

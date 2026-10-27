@@ -110,7 +110,7 @@ void AtomHal::StartSerial()
 	// a big receive buffer (the Psion can send a burst while WiFi is busy),
 	// no transmit buffer: availableForWrite() is then the UART's own FIFO,
 	// so the pacing is not undone by a queue behind it
-	Serial2.setRxBufferSize(4096);
+	Serial2.setRxBufferSize(16384);                // (0.7 s at 230400: WiFi can hold the loop up)
 	Serial2.setTxBufferSize(0);
 	Serial2.begin(iBaud, SERIAL_8N1, iRx, iTx);
 	if (iFlow && iRts >= 0 && iCts >= 0)
@@ -174,6 +174,17 @@ bool AtomHal::TcpConnect(const char* aHost, uint16_t aPort)
 	if (!iPlain.connect(aHost, aPort, 15000))
 		return false;
 	iPlain.setNoDelay(true);                  // keystrokes go at once (SSH)
+	return true;
+	}
+
+// 2.7: is PsiProxy there? A short wait (the name lookup is not counted)
+bool AtomHal::TcpConnectWithin(const char* aHost, uint16_t aPort, uint32_t aMs)
+	{
+	TcpClose();
+	iCur = &iPlain;
+	if (!iPlain.connect(aHost, aPort, (int32_t)aMs))
+		return false;
+	iPlain.setNoDelay(true);
 	return true;
 	}
 
@@ -736,4 +747,45 @@ template <class T> static bool SaveRecord(const char* aKey, const T& aIn)
 bool AtomHal::LoadNets(am::NetList& aL, size_t& aLength) { return LoadRecord("nets", aL, aLength); }
 bool AtomHal::SaveNets(const am::NetList& aL) { return SaveRecord("nets", aL); }
 bool AtomHal::LoadWg(am::WgConfig& aC, size_t& aLength) { return LoadRecord("wg", aC, aLength); }
+
+// The 2.7 record. Unlike the others, a record LONGER than ours (saved by a
+// newer firmware, then a rollback) loads too: the fields we know, the rest
+// left for that firmware, so going back and forth keeps the settings
+bool AtomHal::LoadSettings3(am::Settings3& aS, size_t& aLength)
+	{
+	Preferences p;
+	aLength = 0;
+	if (!p.begin(kNvs, true))
+		return false;
+	size_t have = p.getBytesLength("cfg3");
+	if (have == 0 || have > 4096)
+		{
+		p.end();
+		return false;
+		}
+	memset(&aS, 0, sizeof(aS));
+	if (have <= sizeof(aS))
+		{
+		aLength = p.getBytes("cfg3", &aS, have);
+		p.end();
+		return aLength == have;
+		}
+	uint8_t* buf = (uint8_t*)malloc(have);      // (getBytes will not cut a record short)
+	if (!buf)
+		{
+		p.end();
+		return false;
+		}
+	size_t n = p.getBytes("cfg3", buf, have);
+	p.end();
+	if (n == have)
+		{
+		memcpy(&aS, buf, sizeof(aS));
+		aLength = sizeof(aS);
+		}
+	free(buf);
+	return n == have;
+	}
+
+bool AtomHal::SaveSettings3(const am::Settings3& aS) { return SaveRecord("cfg3", aS); }
 bool AtomHal::SaveWg(const am::WgConfig& aC) { return SaveRecord("wg", aC); }

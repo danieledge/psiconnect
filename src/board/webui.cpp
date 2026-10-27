@@ -7,6 +7,14 @@
 #include <Update.h>
 #include <esp_core_dump.h>
 #include <esp_flash.h>
+#include <lwip/sockets.h>
+#if __has_include("webroutes_local.h")
+// a local build's own pages (git-ignored: kept out of the repository),
+// included twice: here for what they keep, in Begin for their routes
+#define WEB_LOCAL_STATE
+#include "webroutes_local.h"
+#undef WEB_LOCAL_STATE
+#endif
 #include "fwsafe.h"
 #if defined(AM_HAS_LCD)
 #include "screen.h"
@@ -32,6 +40,13 @@ WebUi::WebUi()
 	{
 	iApName[0] = 0;
 	iApPass[0] = 0;
+	for (int i = 0; i < KStreams; i++)
+		{
+		iStreams[i].at = 0;
+		iStreams[i].left = 0;
+		iStreams[i].ms = 0;
+		iStreams[i].path = 0;
+		}
 	}
 
 void WebUi::Begin(Modem& aModem, AtomHal& aHal)
@@ -58,6 +73,7 @@ void WebUi::Begin(Modem& aModem, AtomHal& aHal)
 	iServer.on("/vpn", HTTP_GET, [this]() { PageVpn(); });
 	iServer.on("/wg", HTTP_POST, [this]() { PostWg(); });
 	iServer.on("/net", HTTP_POST, [this]() { PostNet(); });
+	iServer.on("/pptest", HTTP_POST, [this]() { PostPsiProxyTest(); });
 	iServer.on("/api/settings", HTTP_GET, [this]() { ApiSettings(); });
 	iServer.on("/set", HTTP_POST, [this]() { Post(); });
 	iServer.on("/api/settings", HTTP_POST, [this]() { Post(); });
@@ -109,6 +125,11 @@ void WebUi::Begin(Modem& aModem, AtomHal& aHal)
 				iOtaBegun = false;
 				}
 			});
+#if __has_include("webroutes_local.h")
+#define WEB_LOCAL_ROUTES
+#include "webroutes_local.h"
+#undef WEB_LOCAL_ROUTES
+#endif
 	iServer.onNotFound([this]() { NotFound(); });
 	}
 
@@ -178,6 +199,36 @@ void WebUi::Loop()
 		iDns.processNextRequest();
 	if (iStarted)
 		iServer.handleClient();
+	StreamTick();
+	}
+
+// at most a few KB a pass, and only what the socket takes now (MSG_DONTWAIT):
+// the modem's loop goes round between pieces
+void WebUi::StreamTick()
+	{
+	uint32_t now = millis();
+	for (int s = 0; s < KStreams; s++)
+		{
+		TStream& t = iStreams[s];
+		if (!t.left)
+			continue;
+		int fd = t.client.connected() ? t.client.fd() : -1;
+		for (int i = 0; fd >= 0 && i < 4 && t.left; i++)
+			{
+			int n = ::send(fd, t.at, t.left < 1436 ? t.left : 1436, MSG_DONTWAIT);
+			if (n <= 0)
+				break;                        // (EAGAIN: the socket is full; next pass)
+			t.at += n;
+			t.left -= n;
+			t.ms = now;
+			}
+		if (fd < 0 || !t.left || now - t.ms > 20000)
+			{
+			t.client = WiFiClient();          // (done, gone or stuck: the last copy, so the socket closes)
+			t.left = 0;
+			t.path = 0;
+			}
+		}
 	}
 
 void WebUi::ApInfo(char* aOut, size_t aMax) const
@@ -253,6 +304,23 @@ void WebUi::ExtGet(Extension& aExt, const ExtRoute& aRoute)
 	{
 	if (!aRoute.open && !Allowed())
 		return;
+	TStream* free = 0;
+	bool again = false;
+	for (int s = 0; s < KStreams; s++)
+		{
+		if (!iStreams[s].left)
+			free = &iStreams[s];
+		else if (iStreams[s].path == aRoute.path)
+			again = true;
+		}
+	if (again)
+		{
+		// (its last reply is still going, from a body the module may move
+		// on a second Get: later)
+		iServer.sendHeader("Retry-After", "2");
+		iServer.send(503, "text/plain", "Busy: try again\n");
+		return;
+		}
 	WebQuery q(iServer);
 	ExtReply r;
 	aExt.Get(aRoute.path, q, r);
@@ -260,6 +328,18 @@ void WebUi::ExtGet(Extension& aExt, const ExtRoute& aRoute)
 		iServer.sendHeader("Content-Encoding", "gzip");
 	if (r.cache)
 		iServer.sendHeader("Cache-Control", r.cache);
+	if (r.len > 8192 && free && !iS2.webWhole)   // (AT$WEBPIECES, ON as standard)
+		{
+		// (the head now, the body a piece each pass: StreamTick)
+		iServer.setContentLength(r.len);
+		iServer.send(r.status, r.type, "");
+		free->client = iServer.client();
+		free->at = r.body;
+		free->left = r.len;
+		free->ms = millis();
+		free->path = aRoute.path;
+		return;
+		}
 	iServer.send_P(r.status, r.type, (const char*)r.body, r.len);
 	}
 
@@ -361,7 +441,8 @@ void WebUi::Tail()
 	Send(kVersion);
 	Send(" on the ");
 	Send(kBoardName);
-	Send(". Settings take effect at once; <a href=\"/system\">save</a> them to keep them after a restart.</small></p></main></body></html>");
+	Send(". Save on these pages keeps a setting and it takes effect at once. A setting changed with an AT command is kept only after "
+		"<code>AT&amp;W</code> (or <a href=\"/system\">Save on the System page</a>).</small></p></main></body></html>");
 	iServer.sendContent("");
 	}
 
@@ -582,14 +663,15 @@ void WebUi::PageWifi()
 	Send("<h2>Access point</h2><p>This modem's own network, for these pages when it is not on yours: <b>");
 	SendEsc(iApName); Send("</b>");
 	if (iApUp) { Send(", up now with the password <b>"); SendEsc(iApPass); Send("</b>"); }
-	Send(".</p><form method=\"post\" action=\"/set\"><input type=\"hidden\" name=\"back\" value=\"/wifi\"><table>");
+	Send(".</p><form method=\"post\" action=\"/set\"><input type=\"hidden\" name=\"back\" value=\"/wifi\">"
+		"<input type=\"hidden\" name=\"save\" value=\"1\"><table>");
 	for (int i = 0; i < SchemaCount(); i++)
 		{
 		const SchemaEntry& e = SchemaAt(i);
 		if (strcmp(SchemaWebPage(e), "/wifi") == 0 && e.group != SGWifi)
 			Field(e);                           // (SSID and PASS: the form above)
 		}
-	Send("</table><button class=\"go\">Apply</button></form>");
+	Send("</table><button class=\"go\">Save</button></form>");
 	Tail();
 	}
 
@@ -622,7 +704,8 @@ void WebUi::PageSettings()
 		if (!any)
 			continue;
 		Send("<h2>"); Send(grp == SGExt ? mod->Name() : SchemaGroupName(grp)); Send("</h2>");
-		Send("<form method=\"post\" action=\"/set\"><input type=\"hidden\" name=\"back\" value=\"/settings\"><table>");
+		Send("<form method=\"post\" action=\"/set\"><input type=\"hidden\" name=\"back\" value=\"/settings\">"
+			"<input type=\"hidden\" name=\"save\" value=\"1\"><table>");
 		for (int i = 0; i < SchemaCount(); i++)
 			{
 			const SchemaEntry& e = SchemaAt(i);
@@ -631,7 +714,10 @@ void WebUi::PageSettings()
 				continue;
 			Field(e);
 			}
-		Send("</table><button class=\"go\">Apply</button></form>");
+		Send("</table><button class=\"go\">Save</button></form>");
+		if (grp == SGProxy)
+			Send("<form method=\"post\" action=\"/pptest\"><button>Test PsiProxy</button> "
+				"<small>(the address as saved: Save a new one first)</small></form>");
 		if (grp == SGTls)
 			Send("<p><small>With TLS termination the modem sees your mail and pages in plain text, and so does the serial cable. "
 				"For your own modem on your own network only. Set the account's TLS to <i>none</i> in PsiMail, keeping port 993 or 465.</small></p>");
@@ -696,7 +782,8 @@ void WebUi::PageSystem()
 	if (!Allowed()) return;
 	Head("System");
 	Send("<h2>Save</h2><form method=\"post\" action=\"/set\"><input type=\"hidden\" name=\"back\" value=\"/system\">"
-		"<input type=\"hidden\" name=\"save\" value=\"1\"><button class=\"go\">Save settings to flash</button></form>");
+		"<input type=\"hidden\" name=\"save\" value=\"1\"><button class=\"go\">Save settings to flash</button></form>"
+		"<p><small>The other pages save as you go: this is for settings changed with AT commands and not yet saved with AT&amp;W.</small></p>");
 	Send("<h2>Restart</h2><form method=\"post\" action=\"/set\"><input type=\"hidden\" name=\"restart\" value=\"1\"><button>Restart the modem</button></form>");
 	{
 	char t[160];
@@ -756,7 +843,7 @@ void WebUi::PageVpn()
 	for (int i = 0; i < SchemaCount(); i++)
 		if (strcmp(SchemaWebPage(SchemaAt(i)), "/vpn") == 0)
 			Field(SchemaAt(i));
-	Send("</table><button class=\"go\">Apply and save</button></form>");
+	Send("</table><button class=\"go\">Save</button></form>");
 	Send("<h2>Config</h2>");
 	if (WgValid(c))
 		{
@@ -819,6 +906,76 @@ void WebUi::PostWg()
 		char m[120];
 		snprintf(m, sizeof(m), "Not saved: %s.", why);
 		Back(true, m, "/vpn");
+		}
+	}
+
+// /pptest: is PsiProxy (AT$PU) there? A connect as a call to psiproxy makes
+// it, then GET / and its home page must say PsiProxy. The outcome counts as a
+// try, so a pass also ends a remembered failure.
+void WebUi::PostPsiProxyTest()
+	{
+	if (!Allowed()) return;
+	char host[64], m[200];
+	uint16_t port;
+	const Settings3& s3 = iModem->Config3();
+	if (!s3.psiProxy[0])
+		{
+		Back(true, "No PsiProxy is set: enter its address under Web proxy and Save first.", "/settings");
+		return;
+		}
+	if (!PsiProxyAddr(s3, host, sizeof(host), port))
+		{
+		snprintf(m, sizeof(m), "\"%s\" is not host:port.", s3.psiProxy);
+		Back(true, m, "/settings");
+		return;
+		}
+	uint32_t t0 = millis();
+	WiFiClient c;
+	if (!c.connect(host, port, (int32_t)Modem::kPsiProxyConnectMs))
+		{
+		iModem->PsiProxyNote(false, host, port);
+		snprintf(m, sizeof(m), "No answer from %s:%u in %lu.%lu s. Is PsiProxy running on that computer, "
+			"and is the address right?", host, (unsigned)port,
+			(unsigned long)(Modem::kPsiProxyConnectMs / 1000), (unsigned long)(Modem::kPsiProxyConnectMs % 1000 / 100));
+		Back(true, m, "/settings");
+		return;
+		}
+	c.setNoDelay(true);
+	c.print("GET / HTTP/1.0\r\nHost: psiproxy\r\nUser-Agent: PsiConnect\r\n\r\n");
+	char buf[768];
+	size_t n = 0;
+	while (n < sizeof(buf) - 1 && millis() - t0 < 6000 && (c.connected() || c.available()))
+		{
+		int k = c.read((uint8_t*)buf + n, sizeof(buf) - 1 - n);
+		if (k > 0)
+			n += k;
+		else
+			delay(10);
+		}
+	buf[n] = 0;
+	c.stop();
+	uint32_t ms = millis() - t0;
+	char status[48];
+	size_t sl = strcspn(buf, "\r\n");
+	snprintf(status, sizeof(status), "%.*s", (int)(sl < sizeof(status) - 1 ? sl : sizeof(status) - 1), buf);
+	if (strncmp(buf, "HTTP/1.", 7) == 0 && strstr(buf, " 200") == buf + 8 && strstr(buf, "PsiProxy"))
+		{
+		iModem->PsiProxyNote(true, host, port);
+		snprintf(m, sizeof(m), "PsiProxy at %s:%u is working (answered in %lu ms). Calls to psiproxy go to it.",
+			host, (unsigned)port, (unsigned long)ms);
+		Back(false, m, "/settings");
+		}
+	else if (!n)
+		{
+		snprintf(m, sizeof(m), "%s:%u took the connection but sent nothing back. If it is PsiProxy, "
+			"check that it allows this modem's address.", host, (unsigned)port);
+		Back(true, m, "/settings");
+		}
+	else
+		{
+		snprintf(m, sizeof(m), "Something answered at %s:%u, but not PsiProxy (\"%s\"). Is the port right? PsiProxy's is 8081.",
+			host, (unsigned)port, status);
+		Back(true, m, "/settings");
 		}
 	}
 

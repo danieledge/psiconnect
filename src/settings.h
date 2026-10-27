@@ -2,7 +2,7 @@
 // Plain C++ with no Arduino calls (the Atom and the host tests share it).
 // MIT licence (see LICENSE at the top of the repository).
 //
-// Two records:
+// Three records:
 //   Settings  ("cfg", 140 bytes): everything 1.x had. Its size and layout
 //             never change, so a modem updated from 1.x keeps its settings.
 //   Settings2 ("cfg2", 448 bytes): what 2.0 added. Versioned, with spare
@@ -10,6 +10,12 @@
 //             field is added (the load is length-tolerant, so an older,
 //             shorter record still loads). A missing or short record gives
 //             the factory values.
+//   Settings3 ("cfg3", 256 bytes): what 2.7 added (AT$PU). Settings2 cannot
+//             grow without harm: firmware before 2.7 refuses a cfg2 longer
+//             than its own and would reset every setting if it were run
+//             again (a firmware trial rolled back). So new fields go here,
+//             and this record's load takes a longer one too, keeping the
+//             fields it knows.
 // Secrets (the WiFi, access point and web passwords, the exec token) live
 // in these records in NVS only: nothing prints them, and the repository
 // holds none of them.
@@ -21,7 +27,7 @@
 
 namespace am {
 
-static const char* const kVersion = "2.6";
+static const char* const kVersion = "2.7";
 // when this firmware was built: "19 Oct 14:05" (buildstamp.cpp)
 void BuildStamp(char* aOut, size_t aMax);
 
@@ -104,7 +110,9 @@ struct Settings2
 	                           // before 2.2, so an older record loads it as 0: off)
 	uint8_t ext[4];            // extension modules' settings (ext.h: each module's schema names its bytes); old
 	                           // spare bytes, so an older record loads them as 0
-	uint8_t spare[448 - 4 - 2 - 2 - 4 - 5 - 1 - 3 - 1 - 2 - 2 - 1 - 1 - 16 - 33 - 33 - 64 - 33 - 40 - 1 - 64 - 64 - 64 - 1 - 1 - 4];
+	uint8_t webWhole;          // AT$WEBPIECES=OFF: large web replies sent all at once, the loop held up
+	                           // meanwhile. 0 (the standard, and an older record's spare byte): in pieces
+	uint8_t spare[448 - 4 - 2 - 2 - 4 - 5 - 1 - 3 - 1 - 2 - 2 - 1 - 1 - 16 - 33 - 33 - 64 - 33 - 40 - 1 - 64 - 64 - 64 - 1 - 1 - 4 - 1];
 	};
 
 // built-in tripwires so the NVS layout cannot drift unnoticed: the
@@ -115,6 +123,7 @@ static_assert(sizeof(Settings2) == 448, "Settings2 must stay 448 bytes (NVS back
 static_assert(offsetof(Settings2, imapHost) == 248, "imapHost moved: a short record would load mail hosts onto the wrong bytes");
 static_assert(offsetof(Settings2, wgMode) == 441, "wgMode must be the first of the old spare bytes");
 static_assert(offsetof(Settings2, ext) == 442, "ext[] must start at the second of the old spare bytes");
+static_assert(offsetof(Settings2, webWhole) == 446, "webWhole must be the old spare byte after ext[]");
 
 // AT$WG: the WireGuard tunnel (wgtunnel.h)
 enum TWgMode { EWgModeOff = 0, EWgModeOn = 1, EWgModeAuto = 2 };
@@ -148,11 +157,43 @@ bool SetPins(Settings2& aS, const char* aText);
 // stay, because the UART FIFO is what a late interrupt overruns
 void AutoPacing(uint32_t aBaud, bool aFlow, uint32_t& aRate, uint16_t& aBurst, uint16_t& aGap);
 
-// the pair, as the schema and the web pages see them
+// ----- the 2.7 record ------------------------------------------------------
+struct Settings3
+	{
+	uint32_t magic;            // kMagic3
+	uint16_t version;          // kSettings3Version
+	uint16_t length;           // sizeof(Settings3) when saved
+	char psiProxy[64];         // AT$PU: host:port of PsiProxy on a computer; empty = none
+	uint8_t spare[256 - 4 - 2 - 2 - 64];
+	};
+
+// (the same tripwires as Settings2's: new fields take spare bytes, so the
+// record keeps its size and the old fields their places)
+static_assert(sizeof(Settings3) == 256, "Settings3 must stay 256 bytes (NVS back-compat)");
+static_assert(offsetof(Settings3, psiProxy) == 8, "psiProxy moved: a saved record would load onto the wrong bytes");
+
+static const uint32_t kMagic3 = 0x41544d33;  // 'ATM3'
+static const uint16_t kSettings3Version = 1;
+// PsiProxy's port when AT$PU gives none
+static const uint16_t kPsiProxyPort = 8081;
+
+void FactoryDefaults3(Settings3& aS);
+// a record read from NVS (aLength bytes of it: shorter or longer than
+// ours is fine): valid, missing fields at their factory values. False: not
+// a record at all
+bool AcceptSettings3(Settings3& aS, size_t aLength);
+// "host" or "host:port" as AT$PU takes it: a host name or address (letters,
+// digits, '.', '-', '_'), and a port 1..65535. False: not one
+bool ParseHostPort(const char* aText, char* aHost, size_t aHostMax, uint16_t& aPort, uint16_t aDefaultPort);
+// AT$PU taken apart; false: none set (or not a host:port)
+bool PsiProxyAddr(const Settings3& aS, char* aHost, size_t aHostMax, uint16_t& aPort);
+
+// the records, as the schema and the web pages see them
 struct Config
 	{
 	Settings& s;
 	Settings2& s2;
+	Settings3& s3;
 	};
 
 } // namespace am

@@ -250,4 +250,74 @@ bool SetPins(Settings2& aS, const char* aText)
 	return true;
 	}
 
+// ===== the 2.7 record =========================================================
+
+void FactoryDefaults3(Settings3& aS)
+	{
+	memset(&aS, 0, sizeof(aS));
+	aS.magic = kMagic3;
+	aS.version = kSettings3Version;
+	aS.length = (uint16_t)sizeof(Settings3);
+	// AT$PU: none (the modem's own proxy always)
+	}
+
+bool AcceptSettings3(Settings3& aS, size_t aLength)
+	{
+	if (aLength < 8 || aS.magic != kMagic3 || aS.version == 0)
+		return false;
+	size_t have = aS.length;
+	if (have > aLength) have = aLength;
+	if (have > sizeof(Settings3)) have = sizeof(Settings3);   // (a newer, longer record: what we know of it)
+	if (have < sizeof(Settings3))
+		{
+		Settings3 f;
+		FactoryDefaults3(f);
+		memcpy((uint8_t*)&f, (const uint8_t*)&aS, have);
+		aS = f;
+		}
+	aS.version = kSettings3Version;
+	aS.length = (uint16_t)sizeof(Settings3);
+	aS.psiProxy[sizeof(aS.psiProxy) - 1] = 0;
+	return true;
+	}
+
+static bool HostChar(char aC)
+	{
+	return (aC >= 'a' && aC <= 'z') || (aC >= 'A' && aC <= 'Z') || (aC >= '0' && aC <= '9')
+		|| aC == '.' || aC == '-' || aC == '_';
+	}
+
+bool ParseHostPort(const char* aText, char* aHost, size_t aHostMax, uint16_t& aPort, uint16_t aDefaultPort)
+	{
+	if (!aText || aHostMax == 0)
+		return false;
+	size_t n = 0;
+	while (HostChar(aText[n]))
+		n++;
+	if (n == 0 || n >= aHostMax)
+		return false;
+	long port = aDefaultPort;
+	const char* p = aText + n;
+	if (*p == ':')
+		{
+		p++;
+		if (*p < '0' || *p > '9')
+			return false;
+		port = 0;
+		while (*p >= '0' && *p <= '9' && port <= 65535)
+			port = port * 10 + (*p++ - '0');
+		}
+	if (*p || port <= 0 || port > 65535)
+		return false;
+	memcpy(aHost, aText, n);
+	aHost[n] = 0;
+	aPort = (uint16_t)port;
+	return true;
+	}
+
+bool PsiProxyAddr(const Settings3& aS, char* aHost, size_t aHostMax, uint16_t& aPort)
+	{
+	return aS.psiProxy[0] && ParseHostPort(aS.psiProxy, aHost, aHostMax, aPort, kPsiProxyPort);
+	}
+
 } // namespace am
