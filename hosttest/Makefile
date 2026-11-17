@@ -72,6 +72,12 @@ tinfl.o: tinfl/tinfl.c tinfl/rom/miniz.h
 test_proxy_tinfl: test_proxy.cpp fakehal.h $(SRC) $(HDR) tinfl.o $(IMGOBJ)
 	$(CXX) $(CXXFLAGS) $(INC) -DAM_TINFL -Itinfl -o $@ test_proxy.cpp $(SRC) tinfl.o $(IMGOBJ) -lz
 
+# (2.8) how long the proxy's own code takes on this PC, and its memory, for
+# saved pages and pictures: make bench, then ./bench FILE... (README, "The netBook")
+BENCH_IMG = $(FW_IMG)/pmimg.c $(FW_IMG)/pmjpeg.c $(FW_IMG)/pmjprog.c $(FW_IMG)/pmpng.c $(FW_IMG)/pmgif.c $(FW_IMG)/picojpeg.c
+bench: bench.cpp ../src/htmlsimp.cpp ../src/imgconv.cpp ../src/htmlsimp.h ../src/imgconv.h
+	$(CXX) -O2 -w $(INC) -o $@ bench.cpp ../src/htmlsimp.cpp ../src/imgconv.cpp -x c $(BENCH_IMG) -x none -lz
+
 # the test pictures for test_proxy (Pillow): a photo-like JPEG, a PNG and a
 # GIF, each wider than the proxy's limit, and a small GIF that is passed on
 pictures: pictures/photo.jpg
@@ -93,7 +99,7 @@ hostmodem: hostmodem.cpp $(SRC) $(HDR) $(IMGOBJ)
 	$(CXX) $(CXXFLAGS) $(INC) -o $@ hostmodem.cpp $(SRC) $(IMGOBJ) -lz -ldl
 
 clean:
-	rm -f test_fwtrial test_modem test_v22 test_atremote test_usbnet test_proxy test_proxy_tinfl test_imapxcode tinfl.o hostmodem render_screens $(IMGOBJ)
+	rm -f bench test_fwtrial test_modem test_v22 test_atremote test_usbnet test_proxy test_proxy_tinfl test_imapxcode tinfl.o hostmodem render_screens $(IMGOBJ)
 	rm -rf pictures screens
 
 .PHONY: test clean pictures screens

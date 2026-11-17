@@ -13,6 +13,9 @@
 //   - packs that HTML with gzip (gzip.h) when PsiWeb accepts it (Links
 //     does), so it takes a third of the time on the serial line;
 //   - with AT$PI=1, turns pictures into small 16-grey GIFs (imgconv.h);
+//     (2.8) for the netBook, which PsiWeb 0.83 names in each request
+//     ("X-Psi-Screen: 640x480x256"), into GIFs in EPOC's 256 colours at
+//     up to 560 pixels wide instead, on a board with PSRAM;
 //   - passes other files through unchanged;
 //   - keeps the call up between requests (keep-alive), so PsiWeb dials once
 //     for any number of pages and sites;
@@ -90,6 +93,14 @@ public:
 	uint32_t Fetched() const { return iFetched; }      // body bytes from servers
 	uint32_t Sent() const { return iSent; }            // bytes to the Psion
 	uint32_t Pictures() const { return iPictures; }    // pictures converted
+	uint32_t ColourPictures() const { return iColourPictures; }   // ... of them in colour (2.8)
+	// (2.8) whether pictures may be made in colour for a colour screen
+	// (ImageConverter::ColourPossible(): PSRAM); the host tests turn it off
+	// to see the boards without
+	void SetColourAllowed(bool aOn) { iColourAllowed = aOn; }
+	static const int kColourWidth = 560;   // the netBook's pictures: at most this wide
+	static const int kColourMaxKB = 512;   // ... from a file of at most this (PSRAM)
+	static const size_t kSmallJpeg = 12 * 1024;   // a JPEG that fits and is this big or more goes as it is
 
 	void Put(const char* aData, size_t aLen) override; // (HtmlSink: simplified HTML, or a GIF)
 	void Wire(const char* aData, size_t aLen);          // body bytes as they go on the line
@@ -229,6 +240,12 @@ private:
 	// pictures (AT$PI): the file is gathered whole, then decoded and sent
 	// as a GIF while the ring has room
 	int iImgWidth;                       // 0: off
+	// (2.8) the screen the request is for (X-Psi-Screen): a colour one
+	// (the netBook) gets pictures in colour, iScreenWidth wide at most
+	bool iScreenColour;
+	int iScreenWidth;
+	bool iColourAllowed;
+	uint32_t iColourPictures;
 	size_t iImgMax;                      // bytes
 	bool iImgMode;                       // this response is a picture being gathered
 	uint8_t* iImgBuf;

@@ -72,6 +72,7 @@ results); that is the baseline the first bench session confirms first.
 | Web proxy: TLS, redirects, gzip, chunked, keep-alive, back-pressure | Host-unit-tested (1.x suite, 2 × 180 checks with zlib and with tinfl) | the TLS handshake itself is the board's (as 1.x) |
 | Reader mode (`AT$PX=4`) | Host-unit-tested (synthetic pages; same output in any chunking) | heuristic; real pages only with `PAGES=` |
 | Pictures to 16-grey GIF | Host-unit-tested (JPEG, progressive JPEG, PNG, GIF, decoded back with Pillow; oversize and undecodable pass-through; small ring; GIF writer exact round trip) | decode time on the S3 Not measured |
+| (2.8) Pictures in colour for the netBook (`X-Psi-Screen`) | Host-unit-tested (`test_proxy`'s netBook pictures: JPEG, PNG, GIF to an 8-bit GIF in EPOC's palette, every colour EPOC's; a fitting JPEG passed on; progressive to greys; the 5mx's output unchanged; no-PSRAM boards); core's `mail/engine/img/test`; PsiWeb's ARM harness shows the GIF in colour; `hosttest/bench` times on a PC | decode time on the S3 Not measured (README gives estimates) |
 | TLS termination (`AT$TLS`, `tls:`) | Host-unit-tested (reaches the HAL as TLS; failure → `NO CARRIER`) | the handshake on the board as the proxy's |
 | `psiexec` / `AT$EXEC` with `psiexecd.py` | Host-unit-tested, and **end-to-end on this PC** through `hostmodem` (refusals, one-shot `OK`, channel `NO CARRIER`) | |
 | `AT$LOG?` ring, `AT$HELP`, `AT$RESET=YES` | Host-unit-tested | the board's `FactoryReset()` (NVS clear + restart) Compiles |

@@ -17,6 +17,7 @@ src/webpass_local.h
 hosttest/test_atremote
 hosttest/test_imapxcode
 hosttest/test_fwtrial
+hosttest/bench
 hosttest/test_cast
 hosttest/libpccodec.so
 hosttest/run.out

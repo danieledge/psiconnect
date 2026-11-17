@@ -32,6 +32,19 @@ def main():
     scene(384, 240).convert('P', palette=Image.ADAPTIVE, colors=64).save(os.path.join(out, 'photo.gif'))
     big.convert('P', palette=Image.ADAPTIVE, colors=64).save(os.path.join(out, 'big.gif'))
     scene(80, 50).convert('P', palette=Image.ADAPTIVE, colors=16).save(os.path.join(out, 'small.gif'))
+    # (2.8) a JPEG that already fits the netBook (480 wide, over 12 KB, with
+    # grain): passed to it unchanged, progressive or not
+    import random
+    rnd = random.Random(3)
+    fit = scene(480, 300)
+    px = fit.load()
+    for y in range(300):
+        for x in range(480):
+            r, g, b = px[x, y]
+            n = rnd.randint(-30, 30)
+            px[x, y] = (max(0, min(255, r + n)), max(0, min(255, g - n)), b)
+    fit.save(os.path.join(out, 'fits.jpg'), quality=85)
+    fit.save(os.path.join(out, 'fits_prog.jpg'), quality=85, progressive=True)
     # the mean brightness of the big scene, for the test to compare with
     g = big.convert('L')
     with open(os.path.join(out, 'mean.txt'), 'w') as f:

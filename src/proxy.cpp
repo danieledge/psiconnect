@@ -1,6 +1,9 @@
 // proxy.cpp - see proxy.h. MIT licence (see LICENSE at the top of the repository).
 #include "proxy.h"
 #include "modem.h"
+extern "C" {
+#include "pmimg.h"                           // (pmimg_size: a JPEG's size from its head)
+}
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -199,7 +202,9 @@ static bool Append(char* aBuf, size_t& aLen, size_t aMax, const char* aName, con
 Proxy::Proxy(Hal& aHal)
 	: iHal(aHal), iOut(0), iMode(EOn), iState(SClosed), iRequests(0), iFetched(0), iSent(0), iPictures(0),
 	  iReqLen(0), iReqUsed(0), iStartMs(0), iFetched0(0), iSent0(0), iUpOpen(false), iChunkLen(0),
-	  iUpgradeNext(0), iImgWidth(0), iImgMax(0), iImgMode(false), iImgBuf(0), iImgLen(0), iImgCap(0), iImgMs(0),
+	  iUpgradeNext(0), iImgWidth(0), iScreenColour(false), iScreenWidth(0),
+	  iColourAllowed(ImageConverter::ColourPossible()), iColourPictures(0),
+	  iImgMax(0), iImgMode(false), iImgBuf(0), iImgLen(0), iImgCap(0), iImgMs(0),
 	  iGifBuf(0), iGifLen(0), iGifPos(0)
 	{
 	iStatus = 0;
@@ -388,7 +393,8 @@ void Proxy::StatusPage()
 		"<p>Requests: %lu<br>From servers: %lu bytes<br>To the Psion: %lu bytes (%u%%)<br>Pictures converted: %lu</p>"
 		"<p>PsiProxy on a computer: %s</p>"
 		"<p>%s</p></body></html>",
-		kVersion, kModes[iMode >= 0 && iMode <= 4 ? iMode : 0], iMode, iImgWidth ? ", pictures to 16 greys" : "",
+		kVersion, kModes[iMode >= 0 && iMode <= 4 ? iMode : 0], iMode,
+		!iImgWidth ? "" : iColourAllowed ? ", pictures to 16 greys (in colour for the netBook)" : ", pictures to 16 greys",
 		(unsigned long)iRequests, (unsigned long)iFetched, (unsigned long)iSent, pct, (unsigned long)iPictures, up, mem);
 	if (bl < 0 || bl >= (int)sizeof(iScratch))
 		bl = (int)strlen(iScratch);
@@ -700,6 +706,8 @@ bool Proxy::TakeRequest()
 	iUpHdrsLen = 0;
 	iUpHdrs[0] = 0;
 	iPsionGzip = false;
+	iScreenColour = false;
+	iScreenWidth = 0;
 	char hostHdr[128] = "";
 	static const char* const kPass[] = { "user-agent", "accept", "accept-language", "accept-charset",
 		"cookie", "referer", "authorization", "content-type", "if-modified-since", "if-none-match",
@@ -718,6 +726,25 @@ bool Proxy::TakeRequest()
 			const char* v = SkipSpace(colon + 1);
 			if (EqNoCase(h, "host"))
 				Copy(hostHdr, sizeof(hostHdr), v, strlen(v));
+			else if (EqNoCase(h, "x-psi-screen"))
+				{
+				// (2.8) PsiWeb's screen, "WxHxC": 256 colours or more is
+				// the netBook (not passed on to the site)
+				char* e1 = 0;
+				long w = strtol(v, &e1, 10), hh = 0, c = 0;
+				if (e1 && (*e1 == 'x' || *e1 == 'X'))
+					{
+					char* e2 = 0;
+					hh = strtol(e1 + 1, &e2, 10);
+					if (e2 && (*e2 == 'x' || *e2 == 'X'))
+						c = strtol(e2 + 1, 0, 10);
+					}
+				if (w >= 160 && w <= 2048 && hh >= 100 && hh <= 2048 && c >= 256)
+					{
+					iScreenColour = true;
+					iScreenWidth = (int)(w - 80 < kColourWidth ? w - 80 : kColourWidth);
+					}
+				}
 			else if (EqNoCase(h, "connection") || EqNoCase(h, "proxy-connection"))
 				{
 				if (ContainsNoCase(v, "close")) iPsionClose = true;
@@ -1071,9 +1098,12 @@ bool Proxy::PictureStart()
 	const char* type = SkipSpace(iType);
 	if (!(StartsNoCase(type, "image/jpeg") || StartsNoCase(type, "image/png") || StartsNoCase(type, "image/gif")))
 		return false;
-	if (iLength >= 0 && (size_t)iLength > iImgMax)
+	size_t max = iImgMax;
+	if (iScreenColour && iColourAllowed && max < (size_t)kColourMaxKB * 1024)
+		max = (size_t)kColourMaxKB * 1024;   // (PSRAM: a netBook's picture may be bigger)
+	if (iLength >= 0 && (size_t)iLength > max)
 		return false;                        // too big to hold: passed through
-	size_t cap = iLength > 0 ? (size_t)iLength : iImgMax;
+	size_t cap = iLength > 0 ? (size_t)iLength : max;
 	PictureFree();
 	iImgBuf = (uint8_t*)malloc(cap);
 	if (!iImgBuf)
@@ -1132,8 +1162,38 @@ void Proxy::PicturePass()
 void Proxy::PictureDone()
 	{
 	char why[64];
-	bool ok = iImg.Decode(iImgBuf, iImgLen, iImgWidth, why, sizeof(why));
+	bool colour = iScreenColour && iColourAllowed;
+	if (iScreenColour && ImageType(iImgBuf, iImgLen) == 1)
+		{
+		// a JPEG that already fits the netBook (progressive too) goes as it
+		// is: PsiWeb decodes it in colour and dithers it to the palette
+		// itself, and it is a third of the bytes of the same picture as a
+		// GIF in the palette. (Under kSmallJpeg it is converted: PsiWeb
+		// 0.83 can draw a small JPEG black.) This needs no more memory, so
+		// the boards without PSRAM do it too
+		int jw = 0, jh = 0;
+		if (pmimg_size(iImgBuf, iImgLen > 65536 ? 65536 : (int)iImgLen, &jw, &jh) == 0 && jw <= iScreenWidth &&
+			jh <= ImageConverter::kColourMaxHeight && iImgLen >= kSmallJpeg)
+			{
+			char m2[200];
+			snprintf(m2, sizeof(m2), "picture %.60s: %dx%d jpeg fits the netBook, %lu bytes passed through", iUrl,
+				jw, jh, (unsigned long)iImgLen);
+			iHal.Log(m2);
+			PicturePass();
+			FinishBody();
+			return;
+			}
+		}
+	int width = colour ? iScreenWidth : iImgWidth;   // (no PSRAM: as for the 5mx)
+	bool ok = iImg.Decode(iImgBuf, iImgLen, width, why, sizeof(why), colour);
 	char m[200];
+	if (!ok && colour)
+		{
+		// not in colour (a progressive JPEG): in greys at the netBook's width
+		snprintf(m, sizeof(m), "picture %.60s: not in colour (%s): greys", iUrl, why);
+		iHal.Log(m);
+		ok = iImg.Decode(iImgBuf, iImgLen, width, why, sizeof(why), false);
+		}
 	if (!ok)
 		{
 		snprintf(m, sizeof(m), "picture %.60s: not converted (%s), %lu bytes passed through", iUrl, why,
@@ -1152,7 +1212,7 @@ void Proxy::PictureDone()
 	// gcap is a safe upper bound for the LZW of a 16-grey image (well under
 	// 1.25*pixels + headers), so Write cannot overflow it; with no memory for
 	// it (a big picture), fall back to the old chunked stream.
-	size_t gcap = (size_t)iImg.Width() * iImg.Height() * 5 / 4 + 2048;
+	size_t gcap = (size_t)iImg.Width() * iImg.Height() * (iImg.Colour() ? 3 : 2) / 2 + 2048;
 	uint8_t* g = (uint8_t*)malloc(gcap);
 	bool buffered = false;
 	if (g)
@@ -1178,6 +1238,8 @@ void Proxy::PictureDone()
 	RawOut(iScratch, (size_t)n);
 	iChunkLen = 0;
 	iPictures++;
+	if (iImg.Colour())
+		iColourPictures++;
 	// the server's connection: kept if the body ended cleanly, as for any response
 	bool clean = !iUpClose && (iChunked ? iChunkState == CDone : (iLength >= 0 && iLeft <= 0)) && iInPos >= iInLen;
 	if (!clean)
@@ -1202,9 +1264,9 @@ void Proxy::PictureOut()
 			iGifPos += n;
 			}
 		char m[200];
-		snprintf(m, sizeof(m), "picture %.60s: %dx%d -> %dx%d gif, %lu -> %lu bytes, %lu ms", iUrl,
-			iImg.SourceWidth(), iImg.SourceHeight(), iImg.Width(), iImg.Height(), (unsigned long)iImgLen,
-			(unsigned long)iGifLen, (unsigned long)(iHal.Millis() - iImgMs));
+		snprintf(m, sizeof(m), "picture %.60s: %dx%d -> %dx%d gif%s, %lu -> %lu bytes, %lu ms", iUrl,
+			iImg.SourceWidth(), iImg.SourceHeight(), iImg.Width(), iImg.Height(), iImg.Colour() ? " in colour" : "",
+			(unsigned long)iImgLen, (unsigned long)iGifLen, (unsigned long)(iHal.Millis() - iImgMs));
 		iHal.Log(m);
 		PictureFree();
 		NextRequest();
@@ -1217,9 +1279,9 @@ void Proxy::PictureOut()
 		FlushChunk();
 		RawOut("0\r\n\r\n", 5);
 		char m[200];
-		snprintf(m, sizeof(m), "picture %.60s: %dx%d -> %dx%d gif, %lu -> %lu bytes, %lu ms", iUrl,
-			iImg.SourceWidth(), iImg.SourceHeight(), iImg.Width(), iImg.Height(), (unsigned long)iImgLen,
-			(unsigned long)iImg.Written(), (unsigned long)(iHal.Millis() - iImgMs));
+		snprintf(m, sizeof(m), "picture %.60s: %dx%d -> %dx%d gif%s, %lu -> %lu bytes, %lu ms", iUrl,
+			iImg.SourceWidth(), iImg.SourceHeight(), iImg.Width(), iImg.Height(), iImg.Colour() ? " in colour" : "",
+			(unsigned long)iImgLen, (unsigned long)iImg.Written(), (unsigned long)(iHal.Millis() - iImgMs));
 		iHal.Log(m);
 		PictureFree();
 		NextRequest();

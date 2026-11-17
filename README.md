@@ -454,6 +454,62 @@ a big progressive JPEG comes out at 1/8 of its size, the most its
 coefficient memory allows. The settings are taken at the dial, like
 `AT$PX`.
 
+### The netBook (2.8)
+
+PsiWeb 0.83 says in each request which screen it draws on
+(`X-Psi-Screen: 640x480x256` on the netBook, `640x240x16` on the 5mx). The
+header goes no further than the modem (or PsiProxy, when the call is handed
+to it). With `AT$PI=1`, a request from the netBook gets:
+
+- a JPEG that already fits (at most 560 wide and 900 high, 12 KB or more,
+  progressive or not): passed on as it is. PsiWeb decodes it in colour and
+  dithers it to the palette itself, and it is the fewest bytes on the line;
+- any other JPEG (baseline), PNG or GIF, on the AtomS3R (PSRAM): decoded in
+  colour, shrunk to fit 560 pixels (whole-number steps: 800 becomes 400),
+  dithered to EPOC's 256 colours and sent as an 8-bit GIF with that palette,
+  up to a 512 KB file;
+- a progressive JPEG too big to pass on: 16 greys at the netBook's width
+  (the decoder keeps only the brightness of a progressive JPEG);
+- on the AtomS3 Lite and the plain Atom (no PSRAM): the 5mx's 16-grey
+  pictures, except that a JPEG that already fits is passed on in colour.
+
+A request without the header, or from the 5mx, gets exactly what it got
+before. Pages are simplified the same way for both (tables are kept).
+
+#### What the Atom can do alone, and what needs PsiProxy
+
+`make -C hosttest bench` builds `hosttest/bench`, which runs the Atom's own
+simplifier and picture converter on a PC over saved pages and pictures, and
+gives the time and the memory each needs. The Atom's figures below are
+estimates from those: the ESP32-S3 at 240 MHz is taken as 30 to 60 times
+slower than the PC for this code (integer work over large buffers, PSRAM
+behind a cache). **They are not measured on an Atom**; the
+`picture … ms` lines in the modem's log give the real figures. The line
+times are at the paced 5,500 bytes a second of 115,200 bps, and at the
+21,900 of 230,400.
+
+| Page or picture | PC | AtomS3R (estimate) | Out, and time on the line | Verdict |
+|---|---|---|---|---|
+| TLS to a new server | | 1 to 2 s | | works (mbedTLS) |
+| HTML, 34 KB to 1 MB (HN, Wikipedia, Guardian, BBC) | 1 to 34 ms | 0.05 to 2 s, while it downloads | 9 to 200 KB before gzip, about a third after | works: simplified as it streams, tables kept; PsiProxy's article extraction and headline lists are better on news sites |
+| JPEG that fits the netBook | none | none | as it came | works |
+| Baseline JPEG, 550 to 2400 wide, to 560 in colour | 47 to 150 ms | 1.5 to 9 s | 50 to 113 KB GIF: 9 to 21 s, or 2.5 to 5 s | works, slowly; PsiProxy's JPEG is 24 to 47 KB |
+| PNG, 400 to 800 wide, in colour | 25 to 35 ms | 0.8 to 2 s | 29 to 53 KB | works |
+| GIF (first frame), drawing, in colour | 17 ms | 0.5 to 1 s | 21 KB | works |
+| Progressive JPEG bigger than 560 | | | 16-grey GIF | greys only: PsiProxy for colour |
+| JPEG, PNG over 512 KB; any picture over 6 megapixels | | | passed on unchanged | too big: PsiProxy |
+| WebP, AVIF | | | passed on unchanged (PsiWeb cannot show them) | PsiProxy |
+| Memory for one picture | | 0.4 to 1.2 MB of PSRAM's 8 MB | | fits; one picture at a time |
+
+With this change the AtomS3R build is 2,400 KB of the 3,264 KB flash slot
+(73.5 %) and 120 KB of static RAM. A WebP decoder would fit in the flash
+that is left, but is not written.
+
+So the Atom alone gives the netBook colour pictures from ordinary pages;
+PsiProxy gives smaller pictures (JPEG, which the Atom cannot write), every
+format, big pictures, cleaner articles and the page limits. With both, the
+modem hands the call to PsiProxy (`AT$PU`) and the header goes with it.
+
 ### Security
 
 With the proxy, the Atom sees your pages in plain text: it does the TLS, not

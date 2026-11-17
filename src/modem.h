@@ -303,6 +303,7 @@ public:
 	const char* LastDial() const { return iLastDial; }          // the last number or host dialled, "" = none yet
 	const char* LastDialResult() const { return iLastDialResult; }   // "CONNECT", "NO CARRIER" or "ERROR"
 	const Proxy& WebProxy() const { return iProxy; }
+	Proxy& WebProxy() { return iProxy; }       // (the host tests: SetColourAllowed)
 	const Uplink& Link() const { return iUplink; }
 	size_t RingSize() const { return iRing.Size(); }
 	// the web pages: a setting by schema entry (applied as AT$ would), save, factory settings

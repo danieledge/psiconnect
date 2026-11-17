@@ -1082,6 +1082,122 @@ static bool GifStats(const std::string& aGif, int& w, int& h, int& mean, int& gr
 	return ok && sscanf(line, "%d %d %d %d", &w, &h, &mean, &greys) == 4;
 	}
 
+// a GIF's size, number of colours and whether every colour is EPOC's (Pillow)
+static bool GifColours(const std::string& aGif, int& w, int& h, int& colours, int& epoc, int& mode8)
+	{
+	FILE* f = fopen("/tmp/atom-test-picture.gif", "wb");
+	if (!f) return false;
+	fwrite(aGif.data(), 1, aGif.size(), f);
+	fclose(f);
+	FILE* p = popen("python3 -c \"from PIL import Image\nim=Image.open('/tmp/atom-test-picture.gif')\n"
+		"pal=im.getpalette() or []\nrgb=im.convert('RGB')\nc=set(x for _,x in rgb.getcolors(1<<20))\n"
+		"cube=lambda v: v%51==0\nramp=lambda v: v%17==0\n"
+		"ok=all((cube(r) and cube(g) and cube(b)) or (ramp(r) and g==0 and b==0) or (ramp(g) and r==0 and b==0)"
+		" or (ramp(b) and r==0 and g==0) or (ramp(r) and r==g==b) for r,g,b in c)\n"
+		"print(im.width, im.height, len(c), int(ok), int(len(pal)==768))\" 2>/dev/null", "r");
+	if (!p) return false;
+	char line[100] = "";
+	bool ok = fgets(line, sizeof(line), p) != 0;
+	pclose(p);
+	return ok && sscanf(line, "%d %d %d %d %d", &w, &h, &colours, &epoc, &mode8) == 5;
+	}
+
+// 2.8: the netBook (X-Psi-Screen: 640x480x256): pictures in EPOC's 256
+// colours, up to 560 wide; the 5mx (no header, or 16) exactly as before
+static void TestNetbookPictures()
+	{
+	std::string jpg = File("pictures/photo.jpg"), prog = File("pictures/photo_prog.jpg"), png = File("pictures/photo.png");
+	std::string gif = File("pictures/photo.gif");
+	if (jpg.empty() || png.empty() || gif.empty())
+		{
+		printf("   (no pictures/ folder: run make pictures; pictures skipped)\n");
+		return;
+		}
+	Rig r;
+	std::string lastReq;
+	r.hal.responder = [&](const std::string& q, bool& close) {
+		(void)close;
+		lastReq = q;
+		if (Has(q, "GET /photo.jpg ")) return Reply(200, "image/jpeg", jpg);
+		if (Has(q, "GET /photo_prog.jpg ")) return Reply(200, "image/jpeg", prog);
+		if (Has(q, "GET /photo.png ")) return Reply(200, "image/png", png);
+		if (Has(q, "GET /photo.gif ")) return Reply(200, "image/gif", gif);
+		if (Has(q, "GET /fits.jpg ")) return Reply(200, "image/jpeg", File("pictures/fits.jpg"));
+		if (Has(q, "GET /fits_prog.jpg ")) return Reply(200, "image/jpeg", File("pictures/fits_prog.jpg"));
+		return Reply(404, "text/html", "<p>no</p>");
+	};
+	r.TypeRun("AT$PR=0\r"); r.TypeRun("AT$PI=1\r"); r.TypeRun("AT$PW=200\r"); r.TypeRun("AT$PM=96\r");
+	r.Dial();
+	auto fetch = [&](const char* path, const char* screen) {
+		std::string q = std::string("GET http://pics.example.com") + path + " HTTP/1.1\r\nHost: pics.example.com\r\n";
+		if (screen) q += std::string("X-Psi-Screen: ") + screen + "\r\n";
+		r.TypeRun(q + "\r\n", 10000);
+		std::vector<Resp> v = Responses(r.Got());
+		return v.empty() ? Resp() : v.back();
+	};
+	int w = 0, h = 0, n = 0, epoc = 0, m8 = 0, mean = 0;
+	// the 5mx, with its header or without: 16 greys, 200 wide, as before
+	Resp a = fetch("/photo.jpg", 0);
+	Resp b = fetch("/photo.jpg", "640x240x16");
+	CHECK(a.status == 200 && a.h["content-type"] == "image/gif" && a.body == b.body);
+	CHECK(!Has(lastReq, "X-Psi-Screen") && !Has(lastReq, "x-psi-screen"));   // never sent to the site
+	// the netBook: colour, 560 wide at most (800/2 = 400: whole-number shrinks)
+	Resp c = fetch("/photo.jpg", "640x480x256");
+	CHECK(c.status == 200 && c.complete && c.h["content-type"] == "image/gif" && c.body.compare(0, 6, "GIF89a") == 0);
+	CHECK(c.h["content-length"] == std::to_string(c.body.size()));
+	CHECK(r.modem->WebProxy().ColourPictures() == 1);
+	CHECK(r.hal.Logged("800x500 -> 400x250 gif in colour"));
+	if (GifColours(c.body, w, h, n, epoc, m8))
+		{
+		printf("   netBook: photo.jpg -> %zu-byte gif %dx%d, %d colours, all EPOC's %d\n", c.body.size(), w, h, n, epoc);
+		CHECK(w == 400 && h == 250 && n > 16 && epoc == 1 && m8 == 1);
+		}
+	else
+		printf("   (no Pillow: the colour GIFs are not decoded back)\n");
+	// PNG and GIF in colour; a progressive JPEG in greys at the netBook's width
+	struct { const char* path; int w; bool colour; } more[] = {
+		{ "/photo.png", 400, true }, { "/photo.gif", 384, true }, { "/photo_prog.jpg", 400, false }, { 0, 0, false } };
+	for (int i = 0; more[i].path; i++)
+		{
+		Resp x = fetch(more[i].path, "640x480x256");
+		CHECK(x.status == 200 && x.complete && x.h["content-type"] == "image/gif");
+		if (GifColours(x.body, w, h, n, epoc, m8))
+			{
+			printf("   netBook: %s -> %dx%d, %d colours\n", more[i].path, w, h, n);
+			CHECK(w <= 560 && (more[i].colour ? (n > 16 && epoc == 1) : n <= 16));
+			if (!more[i].colour) CHECK(w >= 100);
+			}
+		}
+	CHECK(r.hal.Logged("not in colour"));
+	// a narrower colour screen: its own width less a margin
+	Resp d = fetch("/photo.png", "320x240x65536");
+	if (GifColours(d.body, w, h, n, epoc, m8))
+		CHECK(w <= 240);
+	// rubbish in the header: the 5mx's output
+	Resp e = fetch("/photo.jpg", "640x480x256x9;<b>");
+	Resp f2 = fetch("/photo.jpg", "x");
+	CHECK(f2.body == a.body);
+	(void)e; (void)mean;
+	// a JPEG that already fits the netBook goes as it is (progressive too);
+	// to the 5mx it is a 16-grey GIF as before
+	std::string fits = File("pictures/fits.jpg"), fitsProg = File("pictures/fits_prog.jpg");
+	Resp k = fetch("/fits.jpg", "640x480x256");
+	CHECK(k.status == 200 && k.h["content-type"] == "image/jpeg" && k.body == fits);
+	CHECK(r.hal.Logged("480x300 jpeg fits the netBook"));
+	k = fetch("/fits_prog.jpg", "640x480x256");
+	CHECK(k.status == 200 && k.h["content-type"] == "image/jpeg" && k.body == fitsProg);
+	k = fetch("/fits.jpg", 0);
+	CHECK(k.status == 200 && k.h["content-type"] == "image/gif");
+	// a board without PSRAM: the netBook gets the 5mx's pictures, but a
+	// JPEG that fits still goes as it is (no memory needed)
+	r.modem->WebProxy().SetColourAllowed(false);
+	Resp g = fetch("/photo.jpg", "640x480x256");
+	CHECK(g.body == a.body);
+	k = fetch("/fits.jpg", "640x480x256");
+	CHECK(k.h["content-type"] == "image/jpeg" && k.body == fits);
+	r.modem->WebProxy().SetColourAllowed(true);
+	}
+
 static void TestPictures()
 	{
 	std::string jpg = File("pictures/photo.jpg"), prog = File("pictures/photo_prog.jpg"), png = File("pictures/photo.png");
@@ -1338,6 +1454,7 @@ int main()
 	alarm(300);
 	printf("reader\n");      TestReader();
 	printf("pictures\n");    TestPictures();
+	printf("pictures for the netBook\n");    TestNetbookPictures();
 	printf("%d checks, %d failed\n", gChecks, gFails);
 	return gFails ? 1 : 0;
 	}
