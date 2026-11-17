@@ -822,7 +822,8 @@ void WebUi::PageSystem()
 	Send("<h2>About</h2><p>PsiConnect "); Send(kVersion); Send(" on the "); Send(kBoardName);
 	Send(", built "); Send(built);
 	Send(". <a href=\"/api/settings\">Settings as JSON</a>. The firmware and its documentation are in the psiconnect repository "
-		"(<code>docs/UPGRADE.md</code>).</p>");
+		"(<code>docs/UPGRADE.md</code>).</p>"
+		"<p><small>Support: <a href=\"https://buymeacoffee.com/danedge\">buymeacoffee.com/danedge</a></small></p>");
 	Tail();
 	}
 
