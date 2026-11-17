@@ -1783,6 +1783,11 @@ static void TestWifiFromPsion()
 		&& !Has(g, "tok3n") && !Has(g, "webpw") && !Has(g, "appassword") && !Has(g, "zimodempw") && !Has(g, "pa,ss"));
 	CHECK(Has(g, "cmd: $JOIN=(hidden)") && Has(g, "cmd: $PASS=(hidden)") && Has(g, "cmd: W\"Net,(hidden)")
 		&& Has(g, "cmd: $SCAN") && Has(g, "cmd: $STAT?"));
+	// a space before the '=' (which the command takes) hides it as well
+	r.TypeRun("AT$WEBPASS =spacedpw\r"); r.TypeRun("AT$XK  =spacedtok\r"); r.Got();
+	r.TypeRun("AT$LOG?\r", 300);
+	g = r.Got();
+	CHECK(!Has(g, "spacedpw") && !Has(g, "spacedtok") && Has(g, "cmd: $WEBPASS =(hidden)"));
 	bool clean = true;
 	for (const std::string& l : r.hal.logs)
 		if (Has(l, "hunter22") || Has(l, "password9") || Has(l, "correct horse") || Has(l, "zimodempw"))

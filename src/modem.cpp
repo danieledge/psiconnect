@@ -358,13 +358,18 @@ static bool Field(const char*& aP, char* aOut, size_t aMax)
 // and the password in ATW"ssid,password". Public (modem.h) for the tests
 void LogSafe(const char* aCmd, char* aOut, size_t aMax)
 	{
-	static const char* const kSecret[] = { "$PASS=", "$XK=", "$WEBPASS=", "$APPASS=", "$JOIN=", "$NETADD=", "$WGL=", 0 };
+	// (SetCommand takes spaces before the '=', so they are taken here too)
+	static const char* const kSecret[] = { "$PASS", "$XK", "$WEBPASS", "$APPASS", "$JOIN", "$NETADD", "$WGL", 0 };
 	size_t cut = (size_t)-1;
 	for (int k = 0; kSecret[k]; k++)
 		for (const char* q = aCmd; *q; q++)
 			if (StartsNoCase(q, kSecret[k]))
 				{
-				size_t at = (size_t)(q - aCmd) + strlen(kSecret[k]);
+				const char* r = q + strlen(kSecret[k]);
+				while (*r == ' ') r++;
+				if (*r != '=')
+					continue;
+				size_t at = (size_t)(r - aCmd) + 1;
 				if (at < cut) cut = at;
 				break;
 				}
