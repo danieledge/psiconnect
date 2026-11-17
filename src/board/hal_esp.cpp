@@ -207,6 +207,12 @@ bool AtomHal::UpConnect(const char* aHost, uint16_t aPort, bool aTls, char* aWhy
 	iCur = &iTls;
 	if (TlsVerify())
 		{
+		// (2.9) setInsecure() leaves a flag that setCACertBundle() does not
+		// clear, in both Arduino cores: after one AT$TLSV=0 call every later
+		// call on this client went unchecked, though AT$TLSV was 1 again.
+		// setCACert(NULL) clears it (and names no CA of its own: the bundle
+		// below is used).
+		iTls.setCACert(NULL);
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
 		iTls.setCACertBundle(kCaBundle, sizeof(kCaBundle));
 #else

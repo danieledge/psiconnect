@@ -515,9 +515,21 @@ modem hands the call to PsiProxy (`AT$PU`) and the header goes with it.
 With the proxy, the Atom sees your pages in plain text: it does the TLS, not
 the Psion. Use it only with your own modem on your own WiFi. The Psion-to-Atom
 line is a serial cable. Servers' certificates are checked on the Atom against
-the Mozilla roots in `src/cabundle.h`. To update them, run
+the Mozilla roots in `src/cabundle.h`, and the name in the certificate must
+be the server's. The same check is made for a TLS-terminated call
+(`AT$TLS=1`: PsiMail's mail, and PsiWeb 0.90's direct `https://` pages with
+"Modem provides TLS" on), unless `AT$TLSV=0`. To update the roots, run
 `python3 tools/mkcabundle.py > src/cabundle.h` on a PC with current roots,
-then rebuild.
+then rebuild. The ESP32 anchors only the topmost certificate a server sends,
+by its issuer, so a root that Mozilla has dropped can still be needed for a
+cross-signed chain: example.com ends in SSL.com TLS ECC Root CA 2022 signed
+by AAA Certificate Services, which the bundle has and today's list has not.
+Check such a site before replacing the bundle.
+
+2.9: after one call with `AT$TLSV=0`, every later TLS call went unchecked
+until the Atom restarted, even with `AT$TLSV=1` again (the Arduino core's
+`setInsecure()` flag outlived the next `setCACertBundle()`). It is now
+cleared before each checked call.
 
 ### Memory
 

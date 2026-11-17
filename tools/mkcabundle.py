@@ -15,6 +15,13 @@ key's length (2 bytes each), the subject (DER) and the public key (DER
 SubjectPublicKeyInfo), sorted by subject so the ESP32 can find a server's
 issuer by binary search. Only names and keys are kept: about 65 KB of flash
 for 150 roots, and no RAM, against 200 KB for the PEM files.
+The ESP32 checks only the topmost certificate a server sends against these
+roots, by that certificate's issuer: a chain that ends in a cross-signed
+copy needs the root that signed the copy, even when Mozilla's list has
+dropped it. example.com (November 2026) ends in SSL.com TLS ECC Root CA
+2022 signed by AAA Certificate Services, which today's list no longer has:
+check such sites (pio run, then https://example.com through the Atom)
+before replacing a bundle that has it.
 Needs python3-cryptography. MIT licence (see LICENSE at the top of the repository).
 """
 import sys
