@@ -432,7 +432,15 @@ void WebUi::Head(const char* aTitle)
 	Send("</title>");
 	SendP(FPSTR(kCss));
 	Send("</head><body><header><h1>PsiConnect</h1><a href=\"/\">Status</a><a href=\"/wifi\">WiFi</a><a href=\"/vpn\">VPN</a>"
-		"<a href=\"/settings\">Settings</a><a href=\"/log\">Log</a><a href=\"/system\">System</a><a href=\"/screen\">Screen</a></header><main>");
+		"<a href=\"/settings\">Settings</a><a href=\"/log\">Log</a><a href=\"/system\">System</a>");
+	// (Screen: an extension module's page. Without one the link led to "Not found")
+	bool screen = false;
+	for (int i = 0; i < iModem->ExtensionCount() && !screen; i++)
+		for (const ExtRoute* r = iModem->ExtensionAt(i)->Routes(); r && r->path && !screen; r++)
+			screen = strcmp(r->path, "/screen") == 0;
+	if (screen)
+		Send("<a href=\"/screen\">Screen</a>");
+	Send("</header><main>");
 	}
 
 void WebUi::Tail()
