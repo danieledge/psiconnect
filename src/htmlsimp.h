@@ -74,6 +74,7 @@ private:
 	void EmitText(const char* aS, size_t aLen);
 	void FlushSpace();
 	void StartTag(bool aEnd);
+	const void* TagInfo();               // the tag's entry in the table, looked up once
 	void AttrDone();
 	void TagDone();
 	void RawDone();
@@ -91,6 +92,7 @@ private:
 	// the tag being read
 	bool iEnd;                           // </...>
 	bool iSelfClose;
+	const void* iTagInfo;                // its entry in the table, once looked up (0: not yet)
 	char iName[16];
 	size_t iNameLen;
 	bool iNameLong;
