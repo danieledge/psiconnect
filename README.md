@@ -531,6 +531,11 @@ until the Atom restarted, even with `AT$TLSV=1` again (the Arduino core's
 `setInsecure()` flag outlived the next `setCACertBundle()`). It is now
 cleared before each checked call.
 
+3.0: the firmware is 2.9's, built with PsiCast's module 0.23 (PsiCast 0.29):
+the netBook's whole 640 x 480 screen, and snapshots for scripts that drive a
+Psion (PsiCast's `docs/PROTOCOL.md`, protocol version 2). The screen copy
+for 480 lines (150 KB) is in the AtomS3R's PSRAM.
+
 ### Memory
 
 The plain Atom's ESP32 has about 320 KB of RAM for data and the S3 boards'
