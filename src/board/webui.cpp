@@ -258,32 +258,87 @@ bool WebUi::FromAp()
 // network is trusted (its WPA2 password is the gate)
 bool WebUi::Allowed()
 	{
+	return AllowedFor(false);
+	}
+
+// (3.0) After a wrong password no password is tried for a while: 1 s, then
+// 2, 4 ... up to 60 s (for everyone: the board serves one request at a time,
+// and a guesser is then held to about one try a minute). A request with no
+// password at all (a browser's first) is not a wrong one
+bool WebUi::AuthLocked()
+	{
+	if (!iAuthFails || (int32_t)(millis() - iAuthUntil) >= 0)
+		return false;
+	char s[12];
+	snprintf(s, sizeof(s), "%lu", (unsigned long)((iAuthUntil - millis()) / 1000 + 1));
+	iServer.sendHeader("Retry-After", s);
+	iServer.send(429, "text/plain", "Too many wrong passwords: try again in a moment\n");
+	return true;
+	}
+
+void WebUi::AuthFailed()
+	{
+	if (!iServer.hasHeader("Authorization"))
+		return;
+	if (iAuthFails < 7)
+		iAuthFails++;
+	uint32_t wait = 1000u << (iAuthFails - 1);
+	iAuthUntil = millis() + (wait > 60000 ? 60000 : wait);
+	iHal->Log("Web: a wrong password: no more tries for a while");
+	}
+
+// aToken: the route is PsiCast's token (ExtRoute::token), which user
+// "psicast" with AT$CASTPASS may get as well as user "atom": a script that
+// drives the Psion holds that password, which reaches nothing else
+bool WebUi::AllowedFor(bool aToken)
+	{
 	if (FromAp())
 		{
 		gFwSafe.WebServed();                  // (a new firmware on trial: the pages work)
 		return true;
 		}
-	if (!iS2.webPass[0])
+	const char* cast = iModem ? iModem->Config3().castPass : "";
+	bool castOk = aToken && cast[0];
+	if (!iS2.webPass[0] && !castOk)
 		{
 		iServer.send(403, "text/plain", "No web password is set: set one with AT$WEBPASS, or use the access point");
 		return false;
 		}
-	if (!iServer.authenticate("atom", iS2.webPass))
+	if (AuthLocked())
+		return false;
+	bool ok = (iS2.webPass[0] && iServer.authenticate("atom", iS2.webPass))
+		|| (castOk && iServer.authenticate("psicast", cast));
+	if (!ok)
 		{
+		AuthFailed();
 		iServer.requestAuthentication(BASIC_AUTH, "PsiConnect");
 		return false;
 		}
+	iAuthFails = 0;
 	gFwSafe.WebServed();
 	return true;
 	}
 
 // the same rule as Allowed(), but it sends nothing: the upload handler runs
-// while the body streams in, so it cannot write a response here.
+// while the body streams in, so it cannot write a response here. (3.0) Not
+// while wrong passwords are paused, and never user "psicast"
 bool WebUi::OtaAuth()
 	{
-	bool ok = FromAp() || (iS2.webPass[0] && iServer.authenticate("atom", iS2.webPass));
-	if (ok)
+	if (FromAp())
+		{
 		gFwSafe.WebServed();
+		return true;
+		}
+	if (iAuthFails && (int32_t)(millis() - iAuthUntil) < 0)
+		return false;
+	bool ok = iS2.webPass[0] && iServer.authenticate("atom", iS2.webPass);
+	if (ok)
+		{
+		iAuthFails = 0;
+		gFwSafe.WebServed();
+		}
+	else
+		AuthFailed();
 	return ok;
 	}
 
@@ -302,7 +357,7 @@ private:
 
 void WebUi::ExtGet(Extension& aExt, const ExtRoute& aRoute)
 	{
-	if (!aRoute.open && !Allowed())
+	if (!aRoute.open && !AllowedFor(aRoute.token))
 		return;
 	TStream* free = 0;
 	bool again = false;

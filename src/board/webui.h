@@ -35,6 +35,11 @@ public:
 
 private:
 	bool Allowed();                            // the password, or the access point
+	// (3.0) also user "psicast" with AT$CASTPASS when aToken (PsiCast's
+	// /screen/token only); and a pause after each wrong password
+	bool AllowedFor(bool aToken);
+	bool AuthLocked();                         // a pause after wrong passwords: 429 sent
+	void AuthFailed();
 	void Head(const char* aTitle);
 	void Tail();
 	void Send(const char* aText);
@@ -74,6 +79,8 @@ private:
 	Settings2 iS2;
 	uint32_t iLastScanMs;
 	bool iOtaAllowed;                          // the current upload passed auth
+	uint32_t iAuthFails = 0;                   // (3.0) wrong passwords in a row
+	uint32_t iAuthUntil = 0;                   // ...no more tries until then (millis)
 	bool iOtaBegun;                            // Update.begin() succeeded for it
 	// a large reply sent a piece each pass of the loop, not all at once: a
 	// second's worth of WiFi held up the serial line, whose 4-16 KB buffer

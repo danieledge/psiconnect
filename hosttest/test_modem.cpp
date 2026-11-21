@@ -65,7 +65,7 @@ static void TestBasics()
 	CHECK(Has(r.Got(), "ERROR"));
 	r.TypeRun("ATI\r");
 	g = r.Got();
-	CHECK(g.find("\r\nPsiConnect 2.9 (Psion-tuned)") == 0);     // the first line: the name
+	CHECK(g.find("\r\nPsiConnect 3.0 (Psion-tuned)") == 0);     // the first line: the name
 	CHECK(Has(g, "IP 192.168.1.50"));
 	CHECK(Has(g, "pacing 5500 bytes/s"));
 	CHECK(g.size() >= 6 && g.substr(g.size() - 6) == "\r\nOK\r\n");
@@ -720,6 +720,13 @@ static void TestNewCommands()
 	r.TypeRun("AT$WEBPASS=secret1\r"); r.TypeRun("AT$APPASS=hotspot99\r");
 	CHECK(strcmp(r.modem->Config2().webPass, "secret1") == 0 && strcmp(r.modem->Config2().apPass, "hotspot99") == 0);
 	r.TypeRun("AT$WEBPASS?\r"); CHECK(Has(r.Got(), "(set)"));
+	// (3.0) the PsiCast token password: its own record (3), never shown, cleared by an empty value
+	r.TypeRun("AT$CASTPASS?\r"); CHECK(Has(r.Got(), "(none)"));
+	r.TypeRun("AT$CASTPASS=t0ken-only-pw\r");
+	CHECK(strcmp(r.modem->Config3().castPass, "t0ken-only-pw") == 0 && strcmp(r.modem->Config2().webPass, "secret1") == 0);
+	r.TypeRun("AT$CASTPASS?\r"); g = r.Got(); CHECK(Has(g, "(set)") && !Has(g, "t0ken-only-pw"));
+	r.TypeRun("AT$CASTPASS=\r");
+	CHECK(r.modem->Config3().castPass[0] == 0);
 	r.TypeRun("AT$XK?\r"); CHECK(Has(r.Got(), "(none)"));
 	r.TypeRun("AT$XK=tok3n\r"); r.TypeRun("AT$XK?\r");
 	g = r.Got();
@@ -1355,7 +1362,7 @@ static void TestStatusModel()
 		&& OnBlocks(p, "192.168.1.50"));
 	// the system page: version, board, uplink, memory
 	FillLay(r, am::EPageSystem, p);
-	CHECK(OnBlocks(p, "Version 2.9") && OnBlocks(p, "FakeBoard") && OnBlocks(p, "Uplink Wi-Fi"));
+	CHECK(OnBlocks(p, "Version 3.0") && OnBlocks(p, "FakeBoard") && OnBlocks(p, "Uplink Wi-Fi"));
 	// the log page: the newest line at the bottom, wrapped to the width
 	r.hal.Log("a log line that is longer than the screen is wide, for sure");
 	r.hal.Log("last line");
@@ -1726,7 +1733,7 @@ static void TestWifiFromPsion()
 	r.Run(50);
 	r.TypeRun("AT$STAT?\r", 100);
 	g = r.Got();
-	CHECK(Has(g, "\r\n+STAT:VER=2.9\r\n") && Has(g, "+STAT:BOARD=FakeBoard") && Has(g, "+STAT:SSID=\"Home\"")
+	CHECK(Has(g, "\r\n+STAT:VER=3.0\r\n") && Has(g, "+STAT:BOARD=FakeBoard") && Has(g, "+STAT:SSID=\"Home\"")
 		&& Has(g, "+STAT:WIFI=INTERNET") && Has(g, "+STAT:CUR=\"Home\"") && Has(g, "+STAT:IP=192.168.1.50")
 		&& Has(g, "+STAT:RSSI=-60") && Has(g, "+STAT:NET=1") && Has(g, "+STAT:FAIL=NONE") && Has(g, "+STAT:UP=WIFI")
 		&& Has(g, "+STAT:CALL=0") && Has(g, "+STAT:BAUD=115200") && Has(g, "+STAT:FC=0") && Has(g, "+STAT:CHK=\""));

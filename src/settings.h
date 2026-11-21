@@ -164,13 +164,17 @@ struct Settings3
 	uint16_t version;          // kSettings3Version
 	uint16_t length;           // sizeof(Settings3) when saved
 	char psiProxy[64];         // AT$PU: host:port of PsiProxy on a computer; empty = none
-	uint8_t spare[256 - 4 - 2 - 2 - 64];
+	char castPass[33];         // AT$CASTPASS (3.0): user "psicast" may get PsiCast viewer tokens
+	                           // (/screen/token) and nothing else; empty = no such user. Old spare
+	                           // bytes, so an older record loads it empty
+	uint8_t spare[256 - 4 - 2 - 2 - 64 - 33];
 	};
 
 // (the same tripwires as Settings2's: new fields take spare bytes, so the
 // record keeps its size and the old fields their places)
 static_assert(sizeof(Settings3) == 256, "Settings3 must stay 256 bytes (NVS back-compat)");
 static_assert(offsetof(Settings3, psiProxy) == 8, "psiProxy moved: a saved record would load onto the wrong bytes");
+static_assert(offsetof(Settings3, castPass) == 72, "castPass must be the first of the old spare bytes");
 
 static const uint32_t kMagic3 = 0x41544d33;  // 'ATM3'
 static const uint16_t kSettings3Version = 1;

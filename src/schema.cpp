@@ -61,6 +61,7 @@ static const SchemaEntry kSchema[] =
 	// system
 	{ "WEB", STEnum, F2(web), 0, 2, kWebNames, SAWeb, SGSystem, "Web pages", "OFF; ON (an access point when unconfigured, pages on the network with a password); AP (the access point always)" },
 	{ "WEBPASS", STSecret, F2(webPass), 0, 32, 0, SAWeb, SGSystem, "Web password", "For the pages on the network (user atom). None: those pages are off" },
+	{ "CASTPASS", STSecret, F3(castPass), 0, 32, 0, SANone, SGSystem, "PsiCast token password", "User psicast with this password may only get PsiCast viewer tokens (/screen/token): for a script that drives the Psion, never the settings, updates or logs. None: no such user" },
 	{ "APPASS", STSecret, F2(apPass), 8, 32, 0, SAWeb, SGSystem, "Access point password", "WPA2, 8 to 32 characters" },
 	{ "WEBPIECES", STEnum, F2(webWhole), 0, 1, kPiecesNames, SANone, SGSystem, "Large pages in pieces", "ON, the standard: a large page or file goes out a few KB at a time, the serial line looked after in between (sent at once, a big one held it up long enough for the Psion's link to fail at 230400 with no flow control). OFF: each sent at once" },
 	{ "LOGL", STInt, F2(logLevel), 0, 2, 0, SANone, SGSystem, "Log level", "0 quiet, 1 normal, 2 verbose" },

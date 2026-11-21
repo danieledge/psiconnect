@@ -45,6 +45,9 @@ struct ExtRoute
 	{
 	const char* path;
 	bool open;
+	// (3.0) besides the web password, user "psicast" with AT$CASTPASS may
+	// reach it: only for what a script needs, never settings or updates
+	bool token;
 	};
 
 // the request's query arguments ("" when absent)

@@ -278,6 +278,7 @@ bool AcceptSettings3(Settings3& aS, size_t aLength)
 	aS.version = kSettings3Version;
 	aS.length = (uint16_t)sizeof(Settings3);
 	aS.psiProxy[sizeof(aS.psiProxy) - 1] = 0;
+	aS.castPass[sizeof(aS.castPass) - 1] = 0;
 	return true;
 	}
 

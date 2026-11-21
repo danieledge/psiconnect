@@ -536,6 +536,14 @@ the netBook's whole 640 x 480 screen, and snapshots for scripts that drive a
 Psion (PsiCast's `docs/PROTOCOL.md`, protocol version 2). The screen copy
 for 480 lines (150 KB) is in the AtomS3R's PSRAM.
 
+3.0 also adds `AT$CASTPASS`: a second password, user `psicast`, that can
+only get PsiCast viewer tokens (`/screen/token`), never the settings, the
+firmware upload, WireGuard or the logs, for a script that drives the Psion.
+Empty (the standard) is no such user. Set it from PsiTerm's terminal,
+`AT$CASTPASS=<a long random password>` then `AT&W`, or on the web pages
+(System). And after a wrong password the pages answer 429 for a while: 1 s,
+doubling to 60 s, so a password cannot be guessed at speed.
+
 ### Memory
 
 The plain Atom's ESP32 has about 320 KB of RAM for data and the S3 boards'
